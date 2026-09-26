@@ -1,6 +1,10 @@
 /* global Cesium */
 
-import { loadMappingContent, normalizeSpotName } from "./sheets.js";
+import {
+  loadHistoricPhotos,
+  loadMappingContent,
+  normalizeSpotName,
+} from "./sheets.js";
 import { attachSpotPhotos } from "./photos.js";
 
 const PLATEAU_TILESET_URL =
@@ -170,11 +174,15 @@ const infoGallery = document.getElementById("infoGallery");
 const infoGalleryPrev = document.getElementById("infoGalleryPrev");
 const infoGalleryNext = document.getElementById("infoGalleryNext");
 const infoGalleryCounter = document.getElementById("infoGalleryCounter");
+const infoPhotoTitle = document.getElementById("infoPhotoTitle");
+const infoPhotoMeta = document.getElementById("infoPhotoMeta");
+const infoPhotoDescription = document.getElementById("infoPhotoDescription");
+const infoPhotoCredit = document.getElementById("infoPhotoCredit");
 
 /** @type {Map<string, object>} */
 const spotById = new Map();
 
-/** @type {Array<{url:string,title?:string}>} */
+/** @type {Array<object>} */
 let galleryImages = [];
 let galleryIndex = 0;
 
@@ -195,6 +203,21 @@ function hideInfo() {
   galleryIndex = 0;
 }
 
+function setTextOrHide(el, text) {
+  if (!el) return;
+  const value = String(text || "").trim();
+  el.textContent = value;
+  el.classList.toggle("hidden", !value);
+}
+
+function formatPhotoMeta(photo) {
+  return [photo.date, photo.creator, photo.genre].filter(Boolean).join(" · ");
+}
+
+function formatPhotoCredit(photo) {
+  return [photo.credit, photo.collection].filter(Boolean).join(" / ");
+}
+
 function updateGalleryView() {
   const hasImages = galleryImages.length > 0;
   const hasMultiple = galleryImages.length > 1;
@@ -208,6 +231,10 @@ function updateGalleryView() {
       infoImage.removeAttribute("src");
       infoImage.classList.add("hidden");
     }
+    setTextOrHide(infoPhotoTitle, "");
+    setTextOrHide(infoPhotoMeta, "");
+    setTextOrHide(infoPhotoDescription, "");
+    setTextOrHide(infoPhotoCredit, "");
     return;
   }
 
@@ -217,6 +244,11 @@ function updateGalleryView() {
     infoImage.alt = photo.title || infoTitle?.textContent || "";
     infoImage.classList.remove("hidden");
   }
+
+  setTextOrHide(infoPhotoTitle, photo.title || "");
+  setTextOrHide(infoPhotoMeta, formatPhotoMeta(photo));
+  setTextOrHide(infoPhotoDescription, photo.description || "");
+  setTextOrHide(infoPhotoCredit, formatPhotoCredit(photo));
 
   if (infoGalleryPrev) {
     infoGalleryPrev.classList.toggle("hidden", !hasMultiple);
@@ -370,10 +402,14 @@ function slugifyId(name) {
  * シートの非空セルが優先。空の場合は JSON の値をフォールバックに使う。
  */
 async function loadSpots() {
-  const [metas, contents] = await Promise.all([
+  const [metas, contents, photoRecords] = await Promise.all([
     loadSpotsMeta(),
     loadMappingContent().catch((err) => {
       console.warn("マッピングシートの取得に失敗。spots.json のみで表示します", err);
+      return [];
+    }),
+    loadHistoricPhotos().catch((err) => {
+      console.warn("画像データシートの取得に失敗。写真なしで表示します", err);
       return [];
     }),
   ]);
@@ -401,7 +437,7 @@ async function loadSpots() {
     spots.push({ ...meta });
   }
 
-  await attachSpotPhotos(spots);
+  await attachSpotPhotos(spots, photoRecords);
   return spots;
 }
 

@@ -1,8 +1,5 @@
 const PHOTO_FILE_PATTERN = /\.(jpe?g|png|gif|webp|svg|bmp)$/i;
 const ASSETS_PHOTOS_BASE = "assets/photos/";
-const INDEX_URL = ASSETS_PHOTOS_BASE + "index.json";
-
-let photoIndexPromise = null;
 
 function isDirectImagePath(value) {
   const text = String(value || "").trim();
@@ -17,49 +14,24 @@ function normalizePathSeparators(value) {
     .replace(/\\/g, "/");
 }
 
-function normalizeImageFolder(value) {
+/** シート／スポットのフォルダ指定を assets/photos 配下のキーに正規化する */
+export function normalizeFolderKey(value) {
   let text = normalizePathSeparators(value);
   text = text.replace(/^\.\//, "").replace(/^\/+/, "");
   const prefix = ASSETS_PHOTOS_BASE;
   if (text.toLowerCase().startsWith(prefix)) {
     text = text.slice(prefix.length);
   }
-  return text.replace(/^\/+|\/+$/g, "");
+  text = text.replace(/^\/+|\/+$/g, "");
+  return text ? text.normalize("NFC") : "";
 }
 
-function normalizeFolderKey(value) {
-  const folder = normalizeImageFolder(value);
-  return folder ? folder.normalize("NFC") : "";
-}
-
-function extractFolderFromImagePath(value) {
-  const text = normalizePathSeparators(value)
-    .replace(/^\.\//, "")
-    .replace(/^\/+/, "");
-  const lastSlash = text.lastIndexOf("/");
-  if (lastSlash === -1) return "";
-  return text.slice(0, lastSlash);
-}
-
-function encodePhotoFileName(fileName) {
-  return String(fileName || "")
-    .trim()
+function encodePathSegments(path) {
+  return String(path || "")
     .split("/")
+    .filter(Boolean)
     .map((part) => encodeURIComponent(part))
     .join("/");
-}
-
-function buildPhotoBaseUrl(folder) {
-  const segments = folder.split("/").filter(Boolean).map((seg) =>
-    encodeURIComponent(seg)
-  );
-  return ASSETS_PHOTOS_BASE + segments.join("/") + "/";
-}
-
-function buildPhotoEntry(base, file) {
-  const name = String(file || "").trim();
-  if (!name) return null;
-  return { url: base + encodePhotoFileName(name), title: "" };
 }
 
 function resolveImageUrl(path) {
@@ -70,125 +42,85 @@ function resolveImageUrl(path) {
 
   const normalized = text.replace(/^\.\//, "").replace(/^\/+/, "");
   if (normalized.toLowerCase().startsWith("assets/")) {
-    return normalized
-      .split("/")
-      .filter(Boolean)
-      .map(encodeURIComponent)
-      .join("/");
+    return encodePathSegments(normalized);
   }
 
   if (isDirectImagePath(normalized) && normalized.indexOf("/") === -1) {
     return ASSETS_PHOTOS_BASE + encodeURIComponent(normalized);
   }
 
-  return normalized
-    .split("/")
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join("/");
+  return encodePathSegments(normalized);
 }
 
-function loadPhotoIndex() {
-  if (!photoIndexPromise) {
-    photoIndexPromise = fetch(INDEX_URL)
-      .then((res) => {
-        if (!res.ok) return {};
-        return res.json();
-      })
-      .then((data) => {
-        if (!data || typeof data !== "object") return {};
-        if (data.folders && typeof data.folders === "object") return data.folders;
-        return data;
-      })
-      .catch((err) => {
-        console.warn("写真 index.json の取得に失敗:", err);
-        return {};
-      });
+function joinFolderAndFile(folderPath, fileName) {
+  let folder = normalizePathSeparators(folderPath).replace(/\/+$/, "");
+  folder = folder.replace(/^\.\//, "").replace(/^\/+/, "");
+  const file = String(fileName || "")
+    .trim()
+    .replace(/^\/+/, "");
+  if (!folder || !file) return "";
+
+  if (!folder.toLowerCase().startsWith("assets/")) {
+    folder = ASSETS_PHOTOS_BASE.replace(/\/$/, "") + "/" + normalizeFolderKey(folder);
   }
-  return photoIndexPromise;
+  return folder + "/" + file;
 }
 
-function photosFromIndex(index, folder, base) {
-  const key = folder.normalize("NFC");
-  const files = index[key] || index[folder] || [];
-  if (!Array.isArray(files)) return [];
-  return files
-    .map((file) => String(file || "").trim())
-    .filter((file) => PHOTO_FILE_PATTERN.test(file))
-    .sort((a, b) => a.localeCompare(b, "ja"))
-    .map((file) => buildPhotoEntry(base, file))
-    .filter(Boolean);
+function photoFromRecord(record) {
+  const path = joinFolderAndFile(record.folder, record.file);
+  const url = resolveImageUrl(path);
+  if (!url || !PHOTO_FILE_PATTERN.test(record.file)) return null;
+
+  return {
+    url,
+    file: record.file,
+    folder: normalizeFolderKey(record.folder),
+    title: record.title || "",
+    description: record.description || "",
+    date: record.date || "",
+    creator: record.creator || "",
+    collection: record.collection || "",
+    credit: record.credit || "",
+    order: record.order,
+    genre: record.genre || "",
+    pitch: record.pitch || "",
+  };
 }
 
-function probeNumberedImages(base) {
-  const maxCount = 40;
-  const extensions = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+function comparePhotos(a, b) {
+  const orderA = a.order == null ? Number.POSITIVE_INFINITY : a.order;
+  const orderB = b.order == null ? Number.POSITIVE_INFINITY : b.order;
+  if (orderA !== orderB) return orderA - orderB;
 
-  function probeExtensions(index, extIndex) {
-    if (extIndex >= extensions.length) return Promise.resolve("");
-    const url = base + index + extensions[extIndex];
-    return fetch(url, { method: "HEAD" })
-      .then((res) => (res.ok ? url : probeExtensions(index, extIndex + 1)))
-      .catch(() => probeExtensions(index, extIndex + 1));
+  const sheetA = a.sheetIndex == null ? Number.POSITIVE_INFINITY : a.sheetIndex;
+  const sheetB = b.sheetIndex == null ? Number.POSITIVE_INFINITY : b.sheetIndex;
+  if (sheetA !== sheetB) return sheetA - sheetB;
+
+  return String(a.file || "").localeCompare(String(b.file || ""), "ja");
+}
+
+function groupPhotosByFolder(records) {
+  /** @type {Map<string, object[]>} */
+  const byFolder = new Map();
+  for (const record of records || []) {
+    const photo = photoFromRecord(record);
+    if (!photo) continue;
+    photo.sheetIndex = record.sheetIndex;
+    const key = photo.folder;
+    if (!byFolder.has(key)) byFolder.set(key, []);
+    byFolder.get(key).push(photo);
   }
-
-  function probe(index, found) {
-    if (index > maxCount) return Promise.resolve(found);
-    return probeExtensions(index, 0).then((url) => {
-      if (url) {
-        found.push({ url, title: "" });
-        return probe(index + 1, found);
-      }
-      return found;
-    });
+  for (const list of byFolder.values()) {
+    list.sort(comparePhotos);
   }
-
-  return probe(1, []);
-}
-
-function resolveImagesFromFolder(folderName) {
-  const folder = normalizeFolderKey(folderName);
-  if (!folder) return Promise.resolve([]);
-
-  const base = buildPhotoBaseUrl(folder);
-  return loadPhotoIndex().then((index) => {
-    const fromIndex = photosFromIndex(index, folder, base);
-    if (fromIndex.length > 0) return fromIndex;
-    return probeNumberedImages(base);
-  });
-}
-
-function photoFileNameFromUrl(url) {
-  const part = String(url || "").split("/").pop() || "";
-  try {
-    return decodeURIComponent(part);
-  } catch (_err) {
-    return part;
-  }
-}
-
-function reorderPhotosWithPreferred(photos, preferredUrl, preferredFileName) {
-  if (!photos.length || (!preferredUrl && !preferredFileName)) return photos;
-
-  const index = photos.findIndex((photo) => {
-    if (preferredUrl && photo.url === preferredUrl) return true;
-    if (!preferredFileName) return false;
-    return photoFileNameFromUrl(photo.url) === preferredFileName;
-  });
-
-  if (index <= 0) return photos;
-
-  const reordered = photos.slice();
-  const preferred = reordered.splice(index, 1)[0];
-  reordered.unshift(preferred);
-  return reordered;
+  return byFolder;
 }
 
 /**
- * シートの image 列（フォルダ名 / ファイルパス / URL）から写真配列を解決する。
- * @returns {Promise<{ images: Array<{url:string,title:string}>, image: string }>}
+ * マッピングの image 列（フォルダ）と画像データシートから写真配列を解決する。
+ * @returns {{ images: object[], image: string }}
  */
-export async function resolveSpotPhotos(imageRaw) {
+export function resolveSpotPhotos(imageRaw, photoRecords) {
   const raw = String(imageRaw || "").trim();
   if (!raw) {
     return { images: [], image: "" };
@@ -199,67 +131,58 @@ export async function resolveSpotPhotos(imageRaw) {
     return { images: [{ url, title: "" }], image: url };
   }
 
-  const folderInput = isDirectImagePath(raw)
-    ? extractFolderFromImagePath(raw)
-    : raw;
-  const folder = normalizeFolderKey(folderInput);
-  const preferredUrl = isDirectImagePath(raw) ? resolveImageUrl(raw) : "";
-  const preferredFileName = isDirectImagePath(raw)
-    ? normalizePathSeparators(raw).split("/").pop()
-    : "";
+  const folder = isDirectImagePath(raw)
+    ? normalizeFolderKey(raw.slice(0, raw.lastIndexOf("/")))
+    : normalizeFolderKey(raw);
 
-  if (isDirectImagePath(raw) && !folder) {
-    const url = preferredUrl;
+  if (!folder) {
+    if (isDirectImagePath(raw)) {
+      const url = resolveImageUrl(raw);
+      return url
+        ? { images: [{ url, title: "" }], image: url }
+        : { images: [], image: "" };
+    }
+    return { images: [], image: "" };
+  }
+
+  const byFolder = groupPhotosByFolder(photoRecords);
+  const photos = byFolder.get(folder) || [];
+
+  if (photos.length === 0 && isDirectImagePath(raw)) {
+    const url = resolveImageUrl(raw);
     return url
       ? { images: [{ url, title: "" }], image: url }
       : { images: [], image: "" };
   }
 
-  if (!folder) {
-    return { images: [], image: "" };
-  }
-
-  const photos = await resolveImagesFromFolder(folder);
-  if (photos.length === 0 && preferredUrl) {
-    return {
-      images: [{ url: preferredUrl, title: "" }],
-      image: preferredUrl,
-    };
-  }
-
-  const ordered = reorderPhotosWithPreferred(
-    photos,
-    preferredUrl,
-    preferredFileName
-  );
   return {
-    images: ordered,
-    image: ordered[0] ? ordered[0].url : "",
+    images: photos,
+    image: photos[0] ? photos[0].url : "",
   };
 }
 
-/** 複数スポットの写真を解決して spot.images / spot.image を埋める */
-export async function attachSpotPhotos(spots) {
-  await Promise.all(
-    spots.map(async (spot) => {
-      const raw = spot.imageFolder || spot.image || "";
-      // すでに images 配列がある場合はそのまま
-      if (Array.isArray(spot.images) && spot.images.length > 0) {
-        if (!spot.image) spot.image = spot.images[0].url || "";
-        return;
-      }
-      const resolved = await resolveSpotPhotos(raw);
-      spot.images = resolved.images;
-      spot.image = resolved.image;
-      if (raw && resolved.images.length === 0) {
-        console.warn(
-          "写真が見つかりません:",
-          spot.name,
-          "(" + raw + ")",
-          "— web/assets/photos/<フォルダ>/ に置き、npm run photos:index を実行してください。"
-        );
-      }
-    })
-  );
+/** 複数スポットの写真を画像データシート基準で埋める */
+export async function attachSpotPhotos(spots, photoRecords) {
+  const records = Array.isArray(photoRecords) ? photoRecords : [];
+
+  for (const spot of spots) {
+    if (Array.isArray(spot.images) && spot.images.length > 0) {
+      if (!spot.image) spot.image = spot.images[0].url || "";
+      continue;
+    }
+
+    const raw = spot.imageFolder || spot.image || "";
+    const resolved = resolveSpotPhotos(raw, records);
+    spot.images = resolved.images;
+    spot.image = resolved.image;
+    if (raw && resolved.images.length === 0) {
+      console.warn(
+        "写真が見つかりません:",
+        spot.name,
+        "(" + raw + ")",
+        "— シート「画像データ」にフォルダパスとデータ名を記入し、web/assets/photos/ にファイルを置いてください。"
+      );
+    }
+  }
   return spots;
 }

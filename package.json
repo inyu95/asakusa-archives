@@ -6,7 +6,6 @@
     "start": "npx --yes serve web -p 5173",
     "serve": "npx --yes serve web -p 5173",
     "serve:dotnet": "dotnet run -c Release --project tools/StaticServer/StaticServer.csproj -- web 5173",
-    "convert:ryounkaku": "dotnet run -c Release --project tools/ObjToGlb/ObjToGlb.csproj -- web/models/Ryouunkaku.obj web/models/Ryouunkaku.glb",
-    "photos:index": "node scripts/index-photos.mjs"
+    "convert:ryounkaku": "dotnet run -c Release --project tools/ObjToGlb/ObjToGlb.csproj -- web/models/Ryouunkaku.obj web/models/Ryouunkaku.glb"
   }
 }

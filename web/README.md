@@ -43,18 +43,21 @@ web/
 
 | ソース | 役割 |
 |---|---|
-| [Google スプレッドシート「マッピング」](https://docs.google.com/spreadsheets/d/1CJfTgaM-C0iL7YGpSJVuTUNn9JkpKs5O7dypYBJ1oAA/edit) | コンテンツ（名称・緯度経度・説明・写真フォルダ・URL・年代など） |
+| [Google スプレッドシート「マッピング」](https://docs.google.com/spreadsheets/d/1CJfTgaM-C0iL7YGpSJVuTUNn9JkpKs5O7dypYBJ1oAA/edit) | スポットコンテンツ（名称・緯度経度・説明・写真フォルダ・URL・年代など） |
+| 同スプレッドシート「画像データ」 | 写真一覧とメタ（フォルダパス・データ名・タイトル・年代・作者など） |
 | `data/spots.json` | 配置メタ（`id`・`model`・`scale`・`heading`・`height` など） |
 
 起動時にシートと JSON をマージします。シートの非空セルが優先で、空欄は JSON の値をフォールバックします。照合は `id`、または名称（括弧より前）／`sheetName` です。シートは「リンクを知っている全員が閲覧可」である必要があります。
 
 ## 写真（複数枚）
 
-1. `web/assets/photos/<フォルダ名>/` に画像を置く  
-2. `npm run photos:index` で `index.json` を更新  
-3. シートの `image` 列に **フォルダ名**（例: `凌雲閣`）を書く  
+写真は **シート「画像データ」** が正です（`index.json` は使いません）。
 
-情報パネルで ‹ › により複数枚を切り替えます。`1.jpg`, `2.jpg` … の番号付けなら、index が空でも自動探索します。単一の URL / ファイルパスもそのまま指定できます。
+1. `web/assets/photos/<フォルダ名>/` に画像を置く  
+2. 「画像データ」に `フォルダパス`（例: `assets/photos/凌雲閣`）と `データ名`（例: `1.jpg`）を記入し、タイトル・年代・作者などを埋める  
+3. 「マッピング」の `image` 列に同じフォルダを書く  
+
+情報パネルで ‹ › により複数枚を切り替え、各写真のメタを表示します。`表示順` があればその順、なければシート行順です。
 
 ## モデル変換（OBJ → GLB）
 

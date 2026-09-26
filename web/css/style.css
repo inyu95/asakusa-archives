@@ -153,6 +153,44 @@ body,
   visibility: hidden;
 }
 
+.info-photo-caption {
+  margin-top: 10px;
+}
+
+.info-photo-title {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.info-photo-meta {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+
+.info-photo-description {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.info-photo-credit {
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgba(244, 241, 234, 0.55);
+}
+
+.info-photo-title.hidden,
+.info-photo-meta.hidden,
+.info-photo-description.hidden,
+.info-photo-credit.hidden {
+  display: none;
+}
+
 .info-close {
   position: absolute;
   top: 8px;

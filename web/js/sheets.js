@@ -3,6 +3,7 @@ import { parseGvizRows } from "./gviz.js";
 /** 浅草タイムトラベル — コンテンツ用スプレッドシート */
 export const SHEET_ID = "1CJfTgaM-C0iL7YGpSJVuTUNn9JkpKs5O7dypYBJ1oAA";
 export const SHEET_MAPPING = "マッピング";
+export const SHEET_PHOTOS = "画像データ";
 const SHEET_FETCH_TIMEOUT_MS = 30000;
 const SHEET_FETCH_MAX_RETRIES = 2;
 
@@ -229,6 +230,147 @@ function fetchSheetData(sheetName, retryCount) {
 export async function loadMappingContent() {
   const rows = await fetchSheetData(SHEET_MAPPING);
   return parseRows(rows);
+}
+
+function isPhotoHeaderRow(c) {
+  const colA = normalizeHeaderText(cellValue(c[0]));
+  const colB = normalizeHeaderText(cellValue(c[1]));
+  return (
+    (colA === "フォルダパス" ||
+      colA === "写真パス" ||
+      colA === "folder" ||
+      colA === "folderpath") &&
+    (colB === "データ名" ||
+      colB === "ファイル名" ||
+      colB === "filename" ||
+      colB === "file")
+  );
+}
+
+function getPhotoColumnIndexes(rows) {
+  const defaults = {
+    folder: 0,
+    file: 1,
+    title: 2,
+    description: 3,
+    date: 4,
+    creator: 5,
+    collection: 6,
+    credit: 7,
+    order: 8,
+    genre: 9,
+    pitch: 10,
+  };
+  if (!rows || rows.length === 0) return defaults;
+
+  const headerRow = rows[0].c || [];
+  if (!isPhotoHeaderRow(headerRow)) return defaults;
+
+  const headerMap = {};
+  for (let i = 0; i < headerRow.length; i++) {
+    const header = normalizeHeaderText(cellValue(headerRow[i]));
+    if (!header) continue;
+
+    if (
+      header === "フォルダパス" ||
+      header === "写真パス" ||
+      header === "folder" ||
+      header === "folderpath"
+    )
+      headerMap.folder = i;
+    else if (
+      header === "データ名" ||
+      header === "ファイル名" ||
+      header === "filename" ||
+      header === "file"
+    )
+      headerMap.file = i;
+    else if (header === "写真タイトル" || header === "タイトル" || header === "title")
+      headerMap.title = i;
+    else if (header === "説明" || header === "description" || header === "caption")
+      headerMap.description = i;
+    else if (
+      header === "年代" ||
+      header === "撮影年代" ||
+      header === "date" ||
+      header === "year"
+    )
+      headerMap.date = i;
+    else if (
+      header === "作者/撮影者" ||
+      header === "作者" ||
+      header === "撮影者" ||
+      header === "creator" ||
+      header === "author"
+    )
+      headerMap.creator = i;
+    else if (
+      header.indexOf("所蔵") !== -1 ||
+      header === "出典" ||
+      header === "collection" ||
+      header === "source"
+    )
+      headerMap.collection = i;
+    else if (
+      header.indexOf("クレジット") !== -1 ||
+      header === "credit"
+    )
+      headerMap.credit = i;
+    else if (header === "表示順" || header === "order" || header === "sort")
+      headerMap.order = i;
+    else if (header === "ジャンル" || header === "genre" || header === "category")
+      headerMap.genre = i;
+    else if (header === "pitch") headerMap.pitch = i;
+  }
+
+  const indexes = {};
+  Object.keys(defaults).forEach((key) => {
+    indexes[key] = resolveColumnIndex(headerMap, key, defaults[key]);
+  });
+  return indexes;
+}
+
+function parsePhotoOrder(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : null;
+}
+
+function parsePhotoRows(rows) {
+  const list = [];
+  const col = getPhotoColumnIndexes(rows);
+
+  for (let index = 0; index < rows.length; index++) {
+    const c = rows[index].c || [];
+    if (isPhotoHeaderRow(c)) continue;
+
+    const folder = String(cellValue(c[col.folder]) || "").trim();
+    const file = String(cellValue(c[col.file]) || "").trim();
+    if (!folder || !file) continue;
+
+    list.push({
+      folder,
+      file,
+      title: String(cellTextValue(c[col.title]) || "").trim(),
+      description: String(cellTextValue(c[col.description]) || "").trim(),
+      date: String(cellValue(c[col.date]) || "").trim(),
+      creator: String(cellValue(c[col.creator]) || "").trim(),
+      collection: String(cellValue(c[col.collection]) || "").trim(),
+      credit: String(cellValue(c[col.credit]) || "").trim(),
+      order: parsePhotoOrder(cellValue(c[col.order])),
+      genre: String(cellValue(c[col.genre]) || "").trim(),
+      pitch: String(cellValue(c[col.pitch]) || "").trim(),
+      sheetIndex: index,
+    });
+  }
+  return list;
+}
+
+/** 画像データシートの行を取得する（フォルダパス＋データ名が正） */
+export async function loadHistoricPhotos() {
+  const rows = await fetchSheetData(SHEET_PHOTOS);
+  return parsePhotoRows(rows);
 }
 
 /** 表示名の照合用（括弧以降を除く） */
