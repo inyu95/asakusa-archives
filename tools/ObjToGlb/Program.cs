@@ -5,12 +5,16 @@ using System.Text.Json;
 
 if (args.Length < 2)
 {
-    Console.Error.WriteLine("Usage: ObjToGlb <input.obj> <output.glb>");
+    Console.Error.WriteLine("Usage: ObjToGlb <input.obj> <output.glb> [cellSizeMeters]");
+    Console.Error.WriteLine("  cellSizeMeters  Vertex clustering size (default 0.18). Larger = lighter.");
     return 1;
 }
 
 var inputPath = args[0];
 var outputPath = args[1];
+var cellSize = args.Length >= 3
+    ? float.Parse(args[2], CultureInfo.InvariantCulture)
+    : 0.18f;
 
 Console.WriteLine($"Reading {inputPath}...");
 
@@ -68,7 +72,15 @@ if (positions.Count == 0 || indices.Count == 0)
     return 1;
 }
 
-Console.WriteLine($"Vertices: {positions.Count:N0}, Triangles: {indices.Count / 3:N0}");
+Console.WriteLine($"Raw vertices: {positions.Count:N0}, triangles: {indices.Count / 3:N0}");
+
+if (cellSize > 0)
+{
+    Console.WriteLine($"Simplifying with cell size {cellSize:F3} m...");
+    (positions, indices) = ClusterSimplify(positions, indices, cellSize);
+    Console.WriteLine($"Simplified vertices: {positions.Count:N0}, triangles: {indices.Count / 3:N0}");
+}
+
 Console.WriteLine("Computing normals...");
 
 var normals = new (float X, float Y, float Z)[positions.Count];
@@ -114,9 +126,11 @@ foreach (var p in positions)
     if (p.Z > maxZ) maxZ = p.Z;
 }
 
+var useUint16 = positions.Count <= 65535;
+var indexStride = useUint16 ? 2 : 4;
 var positionByteLength = positions.Count * 12;
 var normalByteLength = positions.Count * 12;
-var indexByteLength = indices.Count * 4;
+var indexByteLength = indices.Count * indexStride;
 var bufferByteLength = Align4(positionByteLength) + Align4(normalByteLength) + Align4(indexByteLength);
 
 var bin = new byte[bufferByteLength];
@@ -137,9 +151,21 @@ foreach (var n in normals)
 }
 offset = Align4(offset);
 var indexOffset = offset;
-foreach (var idx in indices)
+if (useUint16)
 {
-    BinaryPrimitives.WriteUInt32LittleEndian(bin.AsSpan(offset), idx); offset += 4;
+    foreach (var idx in indices)
+    {
+        BinaryPrimitives.WriteUInt16LittleEndian(bin.AsSpan(offset), (ushort)idx);
+        offset += 2;
+    }
+}
+else
+{
+    foreach (var idx in indices)
+    {
+        BinaryPrimitives.WriteUInt32LittleEndian(bin.AsSpan(offset), idx);
+        offset += 4;
+    }
 }
 
 var gltf = new Dictionary<string, object?>
@@ -179,7 +205,8 @@ var gltf = new Dictionary<string, object?>
                 ["metallicFactor"] = 0.0,
                 ["roughnessFactor"] = 0.85,
             },
-            ["doubleSided"] = true,
+            // 閉じた立体なので片面描画でフラグメント負荷を半減
+            ["doubleSided"] = false,
         }
     },
     ["accessors"] = new object[]
@@ -203,7 +230,7 @@ var gltf = new Dictionary<string, object?>
         new Dictionary<string, object?>
         {
             ["bufferView"] = 2,
-            ["componentType"] = 5125,
+            ["componentType"] = useUint16 ? 5123 : 5125,
             ["count"] = indices.Count,
             ["type"] = "SCALAR",
         },
@@ -227,7 +254,7 @@ var binPadding = (4 - (bin.Length % 4)) % 4;
 var binChunkLength = bin.Length + binPadding;
 var totalLength = 12 + 8 + jsonChunkLength + 8 + binChunkLength;
 
-Console.WriteLine($"Writing {outputPath} ({totalLength / (1024.0 * 1024.0):F1} MB)...");
+Console.WriteLine($"Writing {outputPath} ({totalLength / (1024.0 * 1024.0):F2} MB)...");
 
 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
 using (var fs = File.Create(outputPath))
@@ -251,6 +278,76 @@ using (var bw = new BinaryWriter(fs))
 Console.WriteLine("Done.");
 Console.WriteLine($"Bounds Y: {minY:F2} .. {maxY:F2} (height ~{maxY - minY:F2} m)");
 return 0;
+
+/// <summary>
+/// 頂点クラスタリングでメッシュを軽量化する。
+/// 同じ格子セル内の頂点を平均位置にマージし、縮退三角形を捨てる。
+/// </summary>
+static (List<(float X, float Y, float Z)> Positions, List<uint> Indices) ClusterSimplify(
+    List<(float X, float Y, float Z)> positions,
+    List<uint> indices,
+    float cellSize)
+{
+    var inv = 1f / cellSize;
+    var cellMap = new Dictionary<(int X, int Y, int Z), int>(positions.Count / 4);
+    var sums = new List<(float X, float Y, float Z, int Count)>(positions.Count / 4);
+    var remap = new int[positions.Count];
+
+    for (var i = 0; i < positions.Count; i++)
+    {
+        var p = positions[i];
+        var key = (
+            (int)MathF.Floor(p.X * inv),
+            (int)MathF.Floor(p.Y * inv),
+            (int)MathF.Floor(p.Z * inv)
+        );
+
+        if (!cellMap.TryGetValue(key, out var cluster))
+        {
+            cluster = sums.Count;
+            cellMap[key] = cluster;
+            sums.Add((p.X, p.Y, p.Z, 1));
+        }
+        else
+        {
+            var s = sums[cluster];
+            sums[cluster] = (s.X + p.X, s.Y + p.Y, s.Z + p.Z, s.Count + 1);
+        }
+
+        remap[i] = cluster;
+    }
+
+    var newPositions = new List<(float X, float Y, float Z)>(sums.Count);
+    foreach (var s in sums)
+    {
+        var invCount = 1f / s.Count;
+        newPositions.Add((s.X * invCount, s.Y * invCount, s.Z * invCount));
+    }
+
+    var newIndices = new List<uint>(indices.Count);
+    var seen = new HashSet<(uint, uint, uint)>(indices.Count / 3);
+
+    for (var i = 0; i < indices.Count; i += 3)
+    {
+        var a = (uint)remap[indices[i]];
+        var b = (uint)remap[indices[i + 1]];
+        var c = (uint)remap[indices[i + 2]];
+        if (a == b || b == c || c == a) continue;
+
+        // 向きを正規化して重複面を落とす
+        uint x = a, y = b, z = c;
+        if (y < x) (x, y) = (y, x);
+        if (z < x) (x, z) = (z, x);
+        if (z < y) (y, z) = (z, y);
+        if (!seen.Add((x, y, z))) continue;
+
+        newIndices.Add(a);
+        newIndices.Add(b);
+        newIndices.Add(c);
+    }
+
+    return (newPositions, newIndices);
+}
 
 static float ParseFloat(ref ReadOnlySpan<char> span)
 {
@@ -283,3 +380,4 @@ static void Normalize(ref (float X, float Y, float Z) n)
 }
 
 static int Align4(int value) => (value + 3) & ~3;
+

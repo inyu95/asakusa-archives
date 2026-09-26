@@ -23,26 +23,84 @@
 
   <aside id="infoPanel" class="info-panel hidden" aria-live="polite">
     <button type="button" id="infoClose" class="info-close" aria-label="閉じる">×</button>
+    <h1 id="infoTitle"></h1>
+    <p id="infoYears" class="info-years"></p>
     <div id="infoGallery" class="info-gallery hidden">
-      <img id="infoImage" alt="" class="info-image" />
+      <div id="infoGalleryStage" class="info-gallery-stage">
+        <button type="button" id="infoImageButton" class="info-image-button" aria-label="写真を拡大">
+          <img id="infoImage" alt="" class="info-image" />
+        </button>
+        <button
+          type="button"
+          id="infoPhotoListToggle"
+          class="info-photo-list-toggle hidden"
+          aria-label="写真一覧を表示"
+          aria-expanded="false"
+          aria-controls="photoThumbLightbox"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"
+            />
+          </svg>
+        </button>
+      </div>
       <div class="info-gallery-controls">
         <button type="button" id="infoGalleryPrev" class="info-gallery-nav hidden" aria-label="前の写真">‹</button>
         <span id="infoGalleryCounter" class="info-gallery-counter hidden"></span>
         <button type="button" id="infoGalleryNext" class="info-gallery-nav hidden" aria-label="次の写真">›</button>
       </div>
-      <div id="infoPhotoCaption" class="info-photo-caption">
-        <h2 id="infoPhotoTitle" class="info-photo-title hidden"></h2>
-        <p id="infoPhotoMeta" class="info-photo-meta hidden"></p>
-        <p id="infoPhotoDescription" class="info-photo-description hidden"></p>
-        <p id="infoPhotoCredit" class="info-photo-credit hidden"></p>
-      </div>
     </div>
-    <h1 id="infoTitle"></h1>
-    <p id="infoYears" class="info-years"></p>
     <p id="infoDescription"></p>
     <p id="infoNote" class="info-note"></p>
     <ul id="infoSources"></ul>
   </aside>
+
+  <div id="photoThumbLightbox" class="photo-thumb-lightbox hidden" role="dialog" aria-modal="true" aria-labelledby="photoThumbTitle" hidden>
+    <div class="photo-thumb-lightbox-backdrop" data-thumb-close></div>
+    <div class="photo-thumb-lightbox-dialog">
+      <button type="button" id="photoThumbClose" class="photo-thumb-lightbox-close" aria-label="閉じる">×</button>
+      <h2 id="photoThumbTitle" class="photo-thumb-lightbox-title">写真一覧</h2>
+      <p id="photoThumbSubtitle" class="photo-thumb-lightbox-subtitle"></p>
+      <div id="infoPhotoList" class="photo-thumb-grid" role="listbox" aria-label="写真一覧"></div>
+    </div>
+  </div>
+
+  <div id="photoLightbox" class="photo-lightbox hidden" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle" hidden>
+    <div class="photo-lightbox-backdrop" data-lightbox-close></div>
+    <div class="photo-lightbox-dialog">
+      <button type="button" id="lightboxClose" class="photo-lightbox-close" aria-label="閉じる">×</button>
+      <div class="photo-lightbox-media">
+        <button type="button" id="lightboxPrev" class="photo-lightbox-nav photo-lightbox-prev hidden" aria-label="前の写真">‹</button>
+        <div class="photo-lightbox-image-wrap">
+          <img id="lightboxImage" alt="" class="photo-lightbox-image" />
+          <button
+            type="button"
+            id="lightboxPhotoListToggle"
+            class="info-photo-list-toggle photo-lightbox-list-toggle hidden"
+            aria-label="写真一覧を表示"
+            aria-expanded="false"
+            aria-controls="photoThumbLightbox"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"
+              />
+            </svg>
+          </button>
+        </div>
+        <button type="button" id="lightboxNext" class="photo-lightbox-nav photo-lightbox-next hidden" aria-label="次の写真">›</button>
+      </div>
+      <div class="photo-lightbox-body">
+        <h2 id="lightboxTitle" class="photo-lightbox-title"></h2>
+        <p id="lightboxMeta" class="photo-lightbox-meta"></p>
+        <p id="lightboxDescription" class="photo-lightbox-description"></p>
+        <p id="lightboxCredit" class="photo-lightbox-credit"></p>
+      </div>
+    </div>
+  </div>
 
   <footer class="credits">
     3D建物・地形は

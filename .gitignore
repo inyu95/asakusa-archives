@@ -9,8 +9,8 @@ AsakusaTimeTravel_6000.3/*.sln
 # ~1.3GB scene (GitHub 100MB limit) — use LFS or external storage
 AsakusaTimeTravel_6000.3/Assets/Scenes/asakusa.unity
 
-# PLATEAU / CityGML datasets (too large for git)
-Data/
+# PLATEAU / CityGML datasets (too large for git; root only — not web/data/)
+/Data/
 
 # Tools build
 tools/**/bin/

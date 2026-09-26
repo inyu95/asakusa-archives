@@ -7,8 +7,11 @@ import {
 } from "./sheets.js";
 import { attachSpotPhotos } from "./photos.js";
 
-const PLATEAU_TILESET_URL =
-  "https://api.plateauview.mlit.go.jp/datacatalog/3dtiles/13106-bldg-lod2-2025/tileset.json";
+/**
+ * 浅草範囲に絞ったローカル tileset（平坦な葉タイルのみ。REPLACE 階層なし）。
+ * 生成: npm run trim:plateau-asakusa。中身のタイルは PLATEAU CDN を参照。
+ */
+const PLATEAU_TILESET_URL = "data/plateau-asakusa-bldg-lod2.json";
 
 /** PLATEAU 建物と垂直基準を揃えた楕円体高の地形（ジオイド補正済み） */
 const PLATEAU_TERRAIN_URL = "https://tile.plateauview.mlit.go.jp/terrain";
@@ -16,61 +19,20 @@ const PLATEAU_TERRAIN_URL = "https://tile.plateauview.mlit.go.jp/terrain";
 /** モデル／建物が極端に暗くならないよう、太陽が高い時刻に固定（UTC = JST 正午付近） */
 const DAYLIGHT_TIME_ISO = "2025-06-21T03:00:00Z";
 
+/** 葉タイル固定のため SSE は安定表示向けの一定値（キャッシュ不足時は memoryAdjustedSSE が上がるので注意） */
+const BUILDING_SSE = 16;
+
+/**
+ * 起動直後の視点（凌雲閣付近）。
+ * 俯瞰→接近の flyTo だとタイルを二重取得するので、最初からここを向ける。
+ */
 const INITIAL_VIEW = {
-  lon: 139.7945,
-  lat: 35.7142,
-  height: 420,
-  heading: 20,
-  pitch: -35,
+  lon: 139.7932,
+  lat: 35.7158,
+  height: 220,
+  heading: 30,
+  pitch: -28,
 };
-
-/**
- * 浅草エリア（雷門〜浅草寺〜六区〜吾妻橋付近）。
- * 3D 建物はこの矩形内だけ表示し、外側は地形・航空写真のみ。
- */
-const ASAKUSA_BOUNDS = {
-  west: 139.788,
-  south: 35.708,
-  east: 139.803,
-  north: 35.722,
-};
-
-function asakusaRectangle() {
-  return Cesium.Rectangle.fromDegrees(
-    ASAKUSA_BOUNDS.west,
-    ASAKUSA_BOUNDS.south,
-    ASAKUSA_BOUNDS.east,
-    ASAKUSA_BOUNDS.north
-  );
-}
-
-/**
- * PLATEAU 建物を浅草矩形の外側でクリップする（外側は地形のみ見える）。
- * @param {Cesium.Cesium3DTileset} tileset
- */
-function clipBuildingsToAsakusa(tileset) {
-  if (
-    typeof Cesium.ClippingPolygon === "undefined" ||
-    typeof Cesium.ClippingPolygonCollection === "undefined"
-  ) {
-    console.warn("ClippingPolygon 非対応のため、建物のエリア制限をスキップします");
-    return;
-  }
-
-  const rect = asakusaRectangle();
-  const positions = [
-    Cesium.Cartesian3.fromRadians(rect.west, rect.south),
-    Cesium.Cartesian3.fromRadians(rect.east, rect.south),
-    Cesium.Cartesian3.fromRadians(rect.east, rect.north),
-    Cesium.Cartesian3.fromRadians(rect.west, rect.north),
-  ];
-
-  tileset.clippingPolygons = new Cesium.ClippingPolygonCollection({
-    polygons: [new Cesium.ClippingPolygon({ positions })],
-    // true = 多角形の外側をクリップ → 浅草内だけ建物が残る
-    inverse: true,
-  });
-}
 
 /**
  * PLATEAU VIEW 5.0（Re:Earth）相当の IBL 係数。
@@ -128,7 +90,8 @@ function applyPlateauViewSceneLighting(viewer) {
     }
   }
 
-  viewer.scene.globe.enableLighting = true;
+  // 地形ライティングは重いのでオフ（建物・モデルの見た目は IBL 側で担保）
+  viewer.scene.globe.enableLighting = false;
   viewer.scene.fog.enabled = true;
   viewer.scene.fog.density = 0.0002;
   viewer.scene.highDynamicRange = false;
@@ -143,21 +106,55 @@ function applyPlateauViewSceneLighting(viewer) {
 }
 
 /**
+ * PLATEAU CDN への並列リクエスト上限を上げ、タイル取得を速くする。
+ */
+function boostPlateauRequestConcurrency() {
+  const hosts = [
+    "assets.cms.plateau.reearth.io",
+    "api.plateauview.mlit.go.jp",
+    "tile.plateauview.mlit.go.jp",
+  ];
+  for (const host of hosts) {
+    Cesium.RequestScheduler.requestsByServer[`${host}:443`] = 24;
+  }
+  if (Cesium.RequestScheduler.maximumRequestsPerServer < 24) {
+    Cesium.RequestScheduler.maximumRequestsPerServer = 24;
+  }
+}
+
+/**
  * @param {Cesium.Viewer} viewer
  * @returns {Promise<Cesium.Cesium3DTileset>}
  */
 async function loadAsakusaBuildings(viewer) {
+  boostPlateauRequestConcurrency();
+
   const tileset = await Cesium.Cesium3DTileset.fromUrl(PLATEAU_TILESET_URL, {
-    maximumScreenSpaceError: 16,
-    loadSiblings: false,
-    skipLevelOfDetail: true,
+    maximumScreenSpaceError: BUILDING_SSE,
+    // カメラ移動中にタイルを捨てない／周辺を遅延させない（消えたり出たり防止）
+    dynamicScreenSpaceError: false,
+    foveatedScreenSpaceError: false,
+    cullRequestsWhileMoving: false,
+    loadSiblings: true,
+    skipLevelOfDetail: false,
     immediatelyLoadDesiredLevelOfDetail: false,
+    preloadWhenHidden: false,
+    preloadFlightDestinations: false,
+    shadows: Cesium.ShadowMode.DISABLED,
+    // LOD2 テクスチャが重い。キャッシュ不足だと memoryAdjustedSSE が上がり
+    // アングル変更で精緻化が止まり建物が消える。
+    cacheBytes: 4 * 1024 * 1024 * 1024,
+    maximumCacheOverflowBytes: 2 * 1024 * 1024 * 1024,
   });
 
-  // PLATEAU VIEW 相当の照明（カスタムシェーダによる白飛び補正はしない）
+  tileset.tileFailed.addEventListener((error) => {
+    console.warn("PLATEAU tile failed:", error?.url || error);
+  });
+
   applyPlateauViewLighting(tileset);
-  clipBuildingsToAsakusa(tileset);
+  // 範囲制限は trim 済み tileset 側で行う（ClippingPolygon はアングル次第で消失の原因になる）
   viewer.scene.primitives.add(tileset);
+  viewer.scene.requestRender();
   return tileset;
 }
 
@@ -170,14 +167,26 @@ const infoDescription = document.getElementById("infoDescription");
 const infoNote = document.getElementById("infoNote");
 const infoSources = document.getElementById("infoSources");
 const infoImage = document.getElementById("infoImage");
+const infoImageButton = document.getElementById("infoImageButton");
 const infoGallery = document.getElementById("infoGallery");
 const infoGalleryPrev = document.getElementById("infoGalleryPrev");
 const infoGalleryNext = document.getElementById("infoGalleryNext");
 const infoGalleryCounter = document.getElementById("infoGalleryCounter");
-const infoPhotoTitle = document.getElementById("infoPhotoTitle");
-const infoPhotoMeta = document.getElementById("infoPhotoMeta");
-const infoPhotoDescription = document.getElementById("infoPhotoDescription");
-const infoPhotoCredit = document.getElementById("infoPhotoCredit");
+const infoPhotoListToggle = document.getElementById("infoPhotoListToggle");
+const infoPhotoList = document.getElementById("infoPhotoList");
+const photoThumbLightbox = document.getElementById("photoThumbLightbox");
+const photoThumbClose = document.getElementById("photoThumbClose");
+const photoThumbSubtitle = document.getElementById("photoThumbSubtitle");
+const photoLightbox = document.getElementById("photoLightbox");
+const lightboxClose = document.getElementById("lightboxClose");
+const lightboxImage = document.getElementById("lightboxImage");
+const lightboxTitle = document.getElementById("lightboxTitle");
+const lightboxMeta = document.getElementById("lightboxMeta");
+const lightboxDescription = document.getElementById("lightboxDescription");
+const lightboxCredit = document.getElementById("lightboxCredit");
+const lightboxPrev = document.getElementById("lightboxPrev");
+const lightboxNext = document.getElementById("lightboxNext");
+const lightboxPhotoListToggle = document.getElementById("lightboxPhotoListToggle");
 
 /** @type {Map<string, object>} */
 const spotById = new Map();
@@ -185,6 +194,8 @@ const spotById = new Map();
 /** @type {Array<object>} */
 let galleryImages = [];
 let galleryIndex = 0;
+let lightboxIndex = 0;
+let photoListOpen = false;
 
 function setStatus(message, isError = false) {
   if (!statusEl) return;
@@ -197,25 +208,178 @@ function setStatus(message, isError = false) {
   statusEl.textContent = message;
 }
 
-function hideInfo() {
-  infoPanel.classList.add("hidden");
-  galleryImages = [];
-  galleryIndex = 0;
-}
-
-function setTextOrHide(el, text) {
-  if (!el) return;
-  const value = String(text || "").trim();
-  el.textContent = value;
-  el.classList.toggle("hidden", !value);
-}
-
-function formatPhotoMeta(photo) {
+function formatLightboxMeta(photo) {
   return [photo.date, photo.creator, photo.genre].filter(Boolean).join(" · ");
 }
 
 function formatPhotoCredit(photo) {
   return [photo.credit, photo.collection].filter(Boolean).join(" / ");
+}
+
+function isPhotoLightboxOpen() {
+  return Boolean(
+    photoLightbox &&
+      !photoLightbox.hidden &&
+      !photoLightbox.classList.contains("hidden")
+  );
+}
+
+function isPhotoThumbLightboxOpen() {
+  return Boolean(
+    photoThumbLightbox &&
+      !photoThumbLightbox.hidden &&
+      !photoThumbLightbox.classList.contains("hidden")
+  );
+}
+
+function syncPhotoListToggleState() {
+  const toggles = [infoPhotoListToggle, lightboxPhotoListToggle].filter(Boolean);
+  for (const toggle of toggles) {
+    toggle.setAttribute("aria-expanded", photoListOpen ? "true" : "false");
+    toggle.setAttribute(
+      "aria-label",
+      photoListOpen ? "写真一覧を閉じる" : "写真一覧を表示"
+    );
+  }
+}
+
+function setPhotoListOpen(open) {
+  photoListOpen = Boolean(open) && galleryImages.length > 1;
+
+  if (photoThumbLightbox) {
+    photoThumbLightbox.hidden = !photoListOpen;
+    photoThumbLightbox.classList.toggle("hidden", !photoListOpen);
+  }
+
+  if (photoThumbSubtitle) {
+    const spotName = infoTitle?.textContent?.trim() || "";
+    photoThumbSubtitle.textContent = photoListOpen
+      ? (spotName
+          ? `${spotName} · ${galleryImages.length}枚`
+          : `${galleryImages.length}枚`)
+      : "";
+  }
+
+  syncPhotoListToggleState();
+
+  if (photoListOpen) {
+    renderPhotoList();
+  }
+}
+
+function renderPhotoList() {
+  if (!infoPhotoList) return;
+  infoPhotoList.replaceChildren();
+  const activeIndex = isPhotoLightboxOpen() ? lightboxIndex : galleryIndex;
+
+  galleryImages.forEach((photo, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      "info-photo-list-item" + (index === activeIndex ? " is-active" : "");
+    button.setAttribute("role", "option");
+    button.setAttribute(
+      "aria-selected",
+      index === activeIndex ? "true" : "false"
+    );
+    const label =
+      photo.title || photo.file || "写真 " + (index + 1);
+    button.setAttribute("aria-label", label);
+    button.title = label;
+
+    const media = document.createElement("span");
+    media.className = "info-photo-list-media";
+    const thumb = document.createElement("img");
+    thumb.className = "info-photo-list-thumb";
+    thumb.src = photo.url;
+    thumb.alt = "";
+    thumb.loading = "lazy";
+    media.append(thumb);
+    button.append(media);
+
+    const caption = document.createElement("span");
+    caption.className = "info-photo-list-caption";
+    const titleEl = document.createElement("span");
+    titleEl.className = "info-photo-list-title";
+    titleEl.textContent = photo.title || label;
+    caption.append(titleEl);
+    if (photo.date) {
+      const dateEl = document.createElement("span");
+      dateEl.className = "info-photo-list-date";
+      dateEl.textContent = photo.date;
+      caption.append(dateEl);
+    }
+    button.append(caption);
+
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPhotoListOpen(false);
+      if (isPhotoLightboxOpen()) {
+        selectLightboxPhoto(index);
+      } else {
+        selectGalleryPhoto(index);
+        openPhotoLightbox(galleryImages[index]);
+      }
+    });
+    infoPhotoList.append(button);
+  });
+}
+
+function updateLightboxView() {
+  if (!isPhotoLightboxOpen()) return;
+  const photo = galleryImages[lightboxIndex] || galleryImages[0];
+  if (!photo) {
+    closePhotoLightbox();
+    return;
+  }
+
+  if (lightboxImage) {
+    lightboxImage.src = photo.url;
+    lightboxImage.alt = photo.title || "";
+  }
+  if (lightboxTitle) lightboxTitle.textContent = photo.title || "";
+  if (lightboxMeta) lightboxMeta.textContent = formatLightboxMeta(photo);
+  if (lightboxDescription) {
+    lightboxDescription.textContent = photo.description || "";
+  }
+  if (lightboxCredit) lightboxCredit.textContent = formatPhotoCredit(photo);
+
+  const hasMultiple = galleryImages.length > 1;
+  if (lightboxPrev) {
+    lightboxPrev.classList.toggle("hidden", !hasMultiple);
+    lightboxPrev.disabled = !hasMultiple;
+  }
+  if (lightboxNext) {
+    lightboxNext.classList.toggle("hidden", !hasMultiple);
+    lightboxNext.disabled = !hasMultiple;
+  }
+}
+
+function closePhotoLightbox() {
+  if (!photoLightbox) return;
+  photoLightbox.classList.add("hidden");
+  photoLightbox.hidden = true;
+  if (lightboxImage) lightboxImage.removeAttribute("src");
+}
+
+function openPhotoLightbox(photo) {
+  if (!photoLightbox || !photo?.url) return;
+
+  const index = galleryImages.findIndex((item) => item === photo || item.url === photo.url);
+  lightboxIndex = index >= 0 ? index : galleryIndex;
+
+  photoLightbox.hidden = false;
+  photoLightbox.classList.remove("hidden");
+  updateLightboxView();
+}
+
+function hideInfo() {
+  closePhotoLightbox();
+  setPhotoListOpen(false);
+  infoPanel.classList.add("hidden");
+  galleryImages = [];
+  galleryIndex = 0;
+  lightboxIndex = 0;
 }
 
 function updateGalleryView() {
@@ -231,10 +395,11 @@ function updateGalleryView() {
       infoImage.removeAttribute("src");
       infoImage.classList.add("hidden");
     }
-    setTextOrHide(infoPhotoTitle, "");
-    setTextOrHide(infoPhotoMeta, "");
-    setTextOrHide(infoPhotoDescription, "");
-    setTextOrHide(infoPhotoCredit, "");
+    if (infoImageButton) infoImageButton.disabled = true;
+    if (infoPhotoListToggle) infoPhotoListToggle.classList.add("hidden");
+    if (lightboxPhotoListToggle) lightboxPhotoListToggle.classList.add("hidden");
+    setPhotoListOpen(false);
+    if (infoPhotoList) infoPhotoList.replaceChildren();
     return;
   }
 
@@ -244,11 +409,18 @@ function updateGalleryView() {
     infoImage.alt = photo.title || infoTitle?.textContent || "";
     infoImage.classList.remove("hidden");
   }
+  if (infoImageButton) infoImageButton.disabled = false;
 
-  setTextOrHide(infoPhotoTitle, photo.title || "");
-  setTextOrHide(infoPhotoMeta, formatPhotoMeta(photo));
-  setTextOrHide(infoPhotoDescription, photo.description || "");
-  setTextOrHide(infoPhotoCredit, formatPhotoCredit(photo));
+  if (infoPhotoListToggle) {
+    infoPhotoListToggle.classList.toggle("hidden", !hasMultiple);
+  }
+  if (lightboxPhotoListToggle) {
+    lightboxPhotoListToggle.classList.toggle("hidden", !hasMultiple);
+  }
+  if (photoListOpen) {
+    renderPhotoList();
+  }
+  if (!hasMultiple) setPhotoListOpen(false);
 
   if (infoGalleryPrev) {
     infoGalleryPrev.classList.toggle("hidden", !hasMultiple);
@@ -270,11 +442,28 @@ function updateGalleryView() {
   }
 }
 
+function selectGalleryPhoto(index) {
+  if (!galleryImages.length) return;
+  galleryIndex = ((index % galleryImages.length) + galleryImages.length) %
+    galleryImages.length;
+  updateGalleryView();
+}
+
+function selectLightboxPhoto(index) {
+  if (!galleryImages.length) return;
+  lightboxIndex = ((index % galleryImages.length) + galleryImages.length) %
+    galleryImages.length;
+  updateLightboxView();
+}
+
 function shiftGallery(delta) {
   if (galleryImages.length <= 1) return;
-  galleryIndex =
-    (galleryIndex + delta + galleryImages.length) % galleryImages.length;
-  updateGalleryView();
+  selectGalleryPhoto(galleryIndex + delta);
+}
+
+function shiftLightbox(delta) {
+  if (galleryImages.length <= 1) return;
+  selectLightboxPhoto(lightboxIndex + delta);
 }
 
 function showSpotInfo(spot) {
@@ -310,6 +499,8 @@ function showSpotInfo(spot) {
       ? [{ url: spot.image, title: "" }]
       : [];
   galleryIndex = 0;
+  lightboxIndex = 0;
+  setPhotoListOpen(false);
   updateGalleryView();
 
   infoPanel.classList.remove("hidden");
@@ -346,50 +537,73 @@ function findMetaForContent(metas, content) {
   );
 }
 
-function pickContent(value, fallback) {
-  if (value == null) return fallback;
-  if (typeof value === "string" && value.trim() === "") return fallback;
-  return value;
+/** 配置用フィールドのみ（コンテンツはシート側） */
+const PLACEMENT_KEYS = [
+  "id",
+  "sheetName",
+  "lat",
+  "lon",
+  "height",
+  "heightOffset",
+  "heading",
+  "pitch",
+  "roll",
+  "scale",
+  "model",
+  "markerHeight",
+  "visibility",
+];
+
+function pickPlacement(meta) {
+  if (!meta) return {};
+  const out = {};
+  for (const key of PLACEMENT_KEYS) {
+    if (meta[key] != null && meta[key] !== "") out[key] = meta[key];
+  }
+  return out;
 }
 
+/**
+ * spots.json = Unity モデル配置、シート = ピン位置＋情報パネル。
+ * ピン座標はシート正。モデル座標は JSON（無いときはピン座標にフォールバック）。
+ */
 function mergeSpot(meta, content) {
-  const base = meta ? { ...meta } : {};
-  if (!content) return base;
+  const placement = pickPlacement(meta);
+  if (!content) {
+    // シート行なし: JSON の座標をピン／モデル両方のフォールバックにする
+    if (placement.lat == null || placement.lon == null) return placement;
+    return {
+      ...placement,
+      modelLat: placement.lat,
+      modelLon: placement.lon,
+    };
+  }
 
-  const yearFrom = pickContent(content.yearFrom, base.yearFrom);
-  const yearTo = pickContent(content.yearTo, base.yearTo);
-  const sources =
-    content.sources && content.sources.length > 0
-      ? content.sources
-      : base.sources;
+  const pinLat = content.lat != null ? content.lat : placement.lat;
+  const pinLon = content.lon != null ? content.lon : placement.lon;
+  const modelLat = placement.lat != null ? placement.lat : pinLat;
+  const modelLon = placement.lon != null ? placement.lon : pinLon;
 
   return {
-    ...base,
-    id: base.id || content.id || slugifyId(content.name),
-    // シート名が短縮形（例: 凌雲閣）のときはメタの正式名を残す
-    name: preferDisplayName(content.name, base.name),
-    lat: content.lat != null ? content.lat : base.lat,
-    lon: content.lon != null ? content.lon : base.lon,
-    description: pickContent(content.description, base.description),
-    imageFolder: pickContent(content.imageFolder, base.imageFolder),
-    image: pickContent(content.image, base.image),
-    yearFrom,
-    yearTo,
-    category: pickContent(content.category, base.category),
-    role: pickContent(content.role, base.role),
-    sources,
+    ...placement,
+    id: placement.id || content.id || slugifyId(content.name),
+    name: content.name || placement.sheetName || "",
+    // ピン（シート正）
+    lat: pinLat,
+    lon: pinLon,
+    // 3D モデル（Unity / spots.json 正）
+    modelLat,
+    modelLon,
+    description: content.description || "",
+    note: content.note || "",
+    imageFolder: content.imageFolder || "",
+    image: content.image || "",
+    yearFrom: content.yearFrom || "",
+    yearTo: content.yearTo || "",
+    category: content.category || "",
+    role: content.role || "",
+    sources: content.sources || [],
   };
-}
-
-function preferDisplayName(sheetName, metaName) {
-  const fromSheet = pickContent(sheetName, "");
-  const fromMeta = pickContent(metaName, "");
-  if (!fromSheet) return fromMeta;
-  if (!fromMeta) return fromSheet;
-  if (normalizeSpotName(fromSheet) === normalizeSpotName(fromMeta)) {
-    return fromMeta.length >= fromSheet.length ? fromMeta : fromSheet;
-  }
-  return fromSheet;
 }
 
 function slugifyId(name) {
@@ -398,14 +612,17 @@ function slugifyId(name) {
 }
 
 /**
- * spots.json（メタ）とスプレッドシート「マッピング」（コンテンツ）をマージする。
- * シートの非空セルが優先。空の場合は JSON の値をフォールバックに使う。
+ * spots.json（Unity モデル配置）とスプレッドシート「マッピング」（ピン＋コンテンツ）をマージする。
+ * 情報パネルの文言・写真・URL・年代とピン位置はシート。モデル位置は JSON。
  */
 async function loadSpots() {
   const [metas, contents, photoRecords] = await Promise.all([
     loadSpotsMeta(),
     loadMappingContent().catch((err) => {
-      console.warn("マッピングシートの取得に失敗。spots.json のみで表示します", err);
+      console.warn(
+        "マッピングシートの取得に失敗。配置のみ表示します（情報パネルは空）",
+        err
+      );
       return [];
     }),
     loadHistoricPhotos().catch((err) => {
@@ -423,7 +640,7 @@ async function loadSpots() {
     const spot = mergeSpot(meta, content);
     if (spot.lat == null || spot.lon == null) {
       console.warn(
-        "座標がないためスキップ:",
+        "ピン座標がないためスキップ:",
         spot.name || spot.id || "(無名)"
       );
       continue;
@@ -433,8 +650,9 @@ async function loadSpots() {
 
   for (const meta of metas) {
     if (meta.id && usedMetaIds.has(meta.id)) continue;
-    if (meta.lat == null || meta.lon == null) continue;
-    spots.push({ ...meta });
+    const spot = mergeSpot(meta, null);
+    if (spot.lat == null || spot.lon == null) continue;
+    spots.push(spot);
   }
 
   await attachSpotPhotos(spots, photoRecords);
@@ -446,10 +664,12 @@ async function loadSpots() {
  * @param {object} spot
  */
 async function addSpotModel(viewer, spot) {
+  const modelLon = spot.modelLon ?? spot.lon;
+  const modelLat = spot.modelLat ?? spot.lat;
   let height = spot.height ?? 0;
   // 地形がある場合は楕円体高をサンプリングして接地（固定値のずれを防ぐ）
   try {
-    const carto = Cesium.Cartographic.fromDegrees(spot.lon, spot.lat);
+    const carto = Cesium.Cartographic.fromDegrees(modelLon, modelLat);
     const sampled = await Cesium.sampleTerrainMostDetailed(
       viewer.terrainProvider,
       [carto]
@@ -464,7 +684,7 @@ async function addSpotModel(viewer, spot) {
   const heading = Cesium.Math.toRadians(spot.heading ?? 0);
   const pitch = Cesium.Math.toRadians(spot.pitch ?? 0);
   const roll = Cesium.Math.toRadians(spot.roll ?? 0);
-  const position = Cesium.Cartesian3.fromDegrees(spot.lon, spot.lat, height);
+  const position = Cesium.Cartesian3.fromDegrees(modelLon, modelLat, height);
   const orientation = Cesium.Transforms.headingPitchRollQuaternion(
     position,
     new Cesium.HeadingPitchRoll(heading, pitch, roll)
@@ -478,11 +698,14 @@ async function addSpotModel(viewer, spot) {
     model: {
       uri: spot.model,
       scale: spot.scale ?? 1,
-      minimumPixelSize: 48,
+      // 遠距離で無理に大きく描かない（ピクセル拡大は負荷が増える）
+      minimumPixelSize: 0,
       maximumScale: 20000,
       heightReference: Cesium.HeightReference.NONE,
       // シーン光＋既定 IBL に任せる（強い補正は白飛び／黒潰れの原因）
       imageBasedLightingFactor: new Cesium.Cartesian2(1.0, 1.0),
+      // 約 2.5 km 以遠は描画スキップ
+      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2500),
     },
   });
 
@@ -494,8 +717,22 @@ async function addSpotModel(viewer, spot) {
  * @param {Cesium.Viewer} viewer
  * @param {object} spot
  */
-function addSpotMarker(viewer, spot) {
-  const height = (spot.height ?? 0) + (spot.markerHeight ?? 55);
+async function addSpotMarker(viewer, spot) {
+  const markerOffset = spot.markerHeight ?? 55;
+  let height = markerOffset;
+  try {
+    const carto = Cesium.Cartographic.fromDegrees(spot.lon, spot.lat);
+    const sampled = await Cesium.sampleTerrainMostDetailed(
+      viewer.terrainProvider,
+      [carto]
+    );
+    if (Number.isFinite(sampled[0]?.height)) {
+      height = sampled[0].height + markerOffset;
+    }
+  } catch (err) {
+    console.warn(`ピン用地形サンプリング失敗 (${spot.id})`, err);
+  }
+
   viewer.entities.add({
     id: `${spot.id}-marker`,
     name: spot.name,
@@ -554,6 +791,87 @@ async function main() {
   if (infoGalleryNext) {
     infoGalleryNext.addEventListener("click", () => shiftGallery(1));
   }
+  if (infoPhotoListToggle) {
+    infoPhotoListToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPhotoListOpen(!photoListOpen);
+    });
+  }
+  if (lightboxPhotoListToggle) {
+    lightboxPhotoListToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPhotoListOpen(!photoListOpen);
+    });
+  }
+  if (infoImageButton) {
+    infoImageButton.addEventListener("click", () => {
+      const photo = galleryImages[galleryIndex] || galleryImages[0];
+      if (photo) openPhotoLightbox(photo);
+    });
+  }
+  if (photoThumbClose) {
+    photoThumbClose.addEventListener("click", () => setPhotoListOpen(false));
+  }
+  if (photoThumbLightbox) {
+    photoThumbLightbox.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target && target.dataset && target.dataset.thumbClose != null) {
+        setPhotoListOpen(false);
+      }
+    });
+  }
+  if (lightboxClose) {
+    lightboxClose.addEventListener("click", closePhotoLightbox);
+  }
+  if (lightboxPrev) {
+    lightboxPrev.addEventListener("click", () => shiftLightbox(-1));
+  }
+  if (lightboxNext) {
+    lightboxNext.addEventListener("click", () => shiftLightbox(1));
+  }
+  if (photoLightbox) {
+    photoLightbox.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target && target.dataset && target.dataset.lightboxClose != null) {
+        closePhotoLightbox();
+      }
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (isPhotoLightboxOpen()) {
+        closePhotoLightbox();
+        return;
+      }
+      if (isPhotoThumbLightboxOpen() || photoListOpen) {
+        setPhotoListOpen(false);
+        return;
+      }
+      if (infoPanel && !infoPanel.classList.contains("hidden")) {
+        hideInfo();
+      }
+      return;
+    }
+
+    if (!galleryImages.length || galleryImages.length <= 1) return;
+    if (
+      !isPhotoLightboxOpen() &&
+      !isPhotoThumbLightboxOpen() &&
+      (!infoPanel || infoPanel.classList.contains("hidden"))
+    ) {
+      return;
+    }
+
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      if (isPhotoLightboxOpen()) shiftLightbox(-1);
+      else shiftGallery(-1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      if (isPhotoLightboxOpen()) shiftLightbox(1);
+      else shiftGallery(1);
+    }
+  });
 
   setStatus("地図を初期化中…");
 
@@ -569,18 +887,18 @@ async function main() {
     infoBox: false,
     selectionIndicator: false,
     baseLayer: false,
+    // カメラ停止中は再描画しない（アイドル時の CPU/GPU 負荷を大幅削減）
+    requestRenderMode: true,
+    maximumRenderTimeChange: Number.POSITIVE_INFINITY,
+    targetFrameRate: 60,
   });
 
-  // 地形は全域表示。3D 建物だけ浅草にクリップする
-  try {
-    const terrainProvider = await Cesium.CesiumTerrainProvider.fromUrl(
-      PLATEAU_TERRAIN_URL,
-      { requestVertexNormals: true }
-    );
-    viewer.terrainProvider = terrainProvider;
-  } catch (terrainErr) {
-    console.warn("PLATEAU-Terrain の読み込みに失敗:", terrainErr);
-  }
+  // HiDPI 端末でも描画解像度を抑え、操作中のフレーム落ちを緩和
+  const dpr = window.devicePixelRatio || 1;
+  viewer.resolutionScale = Math.min(1, 1 / Math.sqrt(dpr));
+  viewer.scene.fxaa = true;
+  viewer.scene.globe.maximumScreenSpaceError = 2;
+  viewer.scene.globe.tileCacheSize = 100;
 
   viewer.imageryLayers.addImageryProvider(createGsiImageryProvider());
   viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#bfbfbf");
@@ -605,50 +923,52 @@ async function main() {
   setupClickHandler(viewer);
   window.__asakusaViewer = viewer;
 
-  try {
-    setStatus("浅草エリアの建物を読み込み中…");
-    await loadAsakusaBuildings(viewer);
-  } catch (err) {
+  // 地形・建物・スポットを並行開始（地形待ちで建物が止まらないようにする）
+  setStatus("浅草エリアを読み込み中…");
+  const terrainPromise = Cesium.CesiumTerrainProvider.fromUrl(
+    PLATEAU_TERRAIN_URL,
+    { requestVertexNormals: false }
+  )
+    .then((terrainProvider) => {
+      viewer.terrainProvider = terrainProvider;
+      viewer.scene.requestRender();
+    })
+    .catch((terrainErr) => {
+      console.warn("PLATEAU-Terrain の読み込みに失敗:", terrainErr);
+    });
+
+  const buildingsPromise = loadAsakusaBuildings(viewer).catch((err) => {
     console.error(err);
     setStatus(
       "PLATEAU 建物の読み込みに失敗しました（地形・スポットのみ表示）",
       true
     );
-  }
+    return null;
+  });
 
   try {
-    setStatus("スポットを配置中…");
-    const spots = await loadSpots();
-    /** @type {Cesium.Entity|undefined} */
-    let focusEntity;
+    const [spots] = await Promise.all([loadSpots(), terrainPromise]);
     for (const spot of spots) {
       if (spot.visibility === "ar") continue;
       spotById.set(spot.id, spot);
-      addSpotMarker(viewer, spot);
+      await addSpotMarker(viewer, spot);
       if (spot.model) {
         try {
-          focusEntity = await addSpotModel(viewer, spot);
+          await addSpotModel(viewer, spot);
         } catch (modelErr) {
           console.warn(`モデル読込失敗: ${spot.id}`, modelErr);
         }
       }
     }
 
-    if (focusEntity) {
-      await viewer.flyTo(focusEntity, {
-        duration: 1.5,
-        offset: new Cesium.HeadingPitchRange(
-          Cesium.Math.toRadians(30),
-          Cesium.Math.toRadians(-25),
-          250
-        ),
-      });
-    }
+    viewer.scene.requestRender();
+    await buildingsPromise;
     setStatus("凌雲閣をクリックすると説明が表示されます");
     setTimeout(() => setStatus(""), 5000);
   } catch (err) {
     console.error(err);
     setStatus(`スポット読込失敗: ${err.message}`, true);
+    await buildingsPromise;
   }
 }
 

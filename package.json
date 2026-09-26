@@ -6,6 +6,7 @@
     "start": "npx --yes serve web -p 5173",
     "serve": "npx --yes serve web -p 5173",
     "serve:dotnet": "dotnet run -c Release --project tools/StaticServer/StaticServer.csproj -- web 5173",
-    "convert:ryounkaku": "dotnet run -c Release --project tools/ObjToGlb/ObjToGlb.csproj -- web/models/Ryouunkaku.obj web/models/Ryouunkaku.glb"
+    "convert:ryounkaku": "dotnet run -c Release --project tools/ObjToGlb/ObjToGlb.csproj -- web/models/Ryouunkaku.obj web/models/Ryouunkaku.glb 0.18",
+    "trim:plateau-asakusa": "dotnet run -c Release --project tools/TrimPlateauTileset/TrimPlateauTileset.csproj -- https://assets.cms.plateau.reearth.io/assets/75/76c6bc-df54-4bf4-a869-b513526b5bd2/13106_taito-ku_city_2025_citygml_1_op_bldg_3dtiles_lod2/tileset.json web/data/plateau-asakusa-bldg-lod2.json 139.787 35.707 139.804 35.723 17"
   }
 }

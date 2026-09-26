@@ -1,0 +1,15 @@
+{
+  "spots": [
+    {
+      "id": "ryounkaku",
+      "sheetName": "凌雲閣",
+      "lat": 35.71575,
+      "lon": 139.793194,
+      "height": 40,
+      "heading": 0,
+      "scale": 0.86,
+      "model": "models/Ryouunkaku.glb",
+      "visibility": "both"
+    }
+  ]
+}

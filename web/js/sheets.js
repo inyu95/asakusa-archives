@@ -74,6 +74,7 @@ function getColumnIndexes(rows) {
     coords: 1,
     image: 2,
     text: 3,
+    note: -1,
     url: 5,
     urlLabel: 6,
     openingYear: 7,
@@ -107,6 +108,13 @@ function getColumnIndexes(rows) {
     )
       headerMap.image = i;
     else if (header === "text" || header === "説明") headerMap.text = i;
+    else if (
+      header === "note" ||
+      header === "注記" ||
+      header === "備考" ||
+      header === "メモ"
+    )
+      headerMap.note = i;
     else if (header.indexOf("url表示") !== -1) headerMap.urlLabel = i;
     else if (
       header === "url" ||
@@ -180,6 +188,10 @@ function parseRows(rows) {
       imageFolder: imageRaw,
       image: isDirectImagePath(imageRaw) ? imageRaw : "",
       description: String(cellTextValue(c[col.text]) || "").trim(),
+      note:
+        col.note >= 0
+          ? String(cellTextValue(c[col.note]) || "").trim()
+          : "",
       yearFrom: String(cellValue(c[col.openingYear]) || "").trim(),
       yearTo: String(cellValue(c[col.closingYear]) || "").trim(),
       category: String(cellValue(c[col.category]) || "").trim(),
