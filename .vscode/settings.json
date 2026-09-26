@@ -1,0 +1,28 @@
+{
+  "files.watcherExclude": {
+    "**/AsakusaTimeTravel_6000.3/Library/**": true,
+    "**/AsakusaTimeTravel_6000.3/Temp/**": true,
+    "**/AsakusaTimeTravel_6000.3/Logs/**": true,
+    "**/AsakusaTimeTravel_6000.3/obj/**": true,
+    "**/AsakusaTimeTravel_6000.3/UserSettings/**": true,
+    "**/AsakusaTimeTravel_6000.3/.vs/**": true,
+    "**/Data/**": true,
+    "**/tools/**/bin/**": true,
+    "**/tools/**/obj/**": true
+  },
+  "search.exclude": {
+    "**/AsakusaTimeTravel_6000.3/Library": true,
+    "**/AsakusaTimeTravel_6000.3/Temp": true,
+    "**/AsakusaTimeTravel_6000.3/Logs": true,
+    "**/AsakusaTimeTravel_6000.3/obj": true,
+    "**/Data": true
+  },
+  "files.exclude": {
+    "**/AsakusaTimeTravel_6000.3/Library": true,
+    "**/AsakusaTimeTravel_6000.3/Temp": true,
+    "**/AsakusaTimeTravel_6000.3/Logs": true,
+    "**/AsakusaTimeTravel_6000.3/.vs": true
+  },
+  "git.autoRepositoryDetection": "openEditors",
+  "git.detectSubmodules": false
+}

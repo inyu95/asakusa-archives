@@ -1,0 +1,23 @@
+# Unity
+AsakusaTimeTravel_6000.3/Library/
+AsakusaTimeTravel_6000.3/Temp/
+AsakusaTimeTravel_6000.3/Logs/
+AsakusaTimeTravel_6000.3/obj/
+AsakusaTimeTravel_6000.3/UserSettings/
+AsakusaTimeTravel_6000.3/*.csproj
+AsakusaTimeTravel_6000.3/*.sln
+# ~1.3GB scene (GitHub 100MB limit) — use LFS or external storage
+AsakusaTimeTravel_6000.3/Assets/Scenes/asakusa.unity
+
+# PLATEAU / CityGML datasets (too large for git)
+Data/
+
+# Tools build
+tools/**/bin/
+tools/**/obj/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vs/
+*.user
