@@ -36,6 +36,7 @@ web/
   data/spots.json         ← Unity モデル配置のみ（lat/lon・scale など）
   data/plateau-asakusa-bldg-lod2.json ← 浅草範囲 PLATEAU 建物（LOD2・平坦タイル）
   assets/photos/          ← スポット写真（フォルダ単位）
+  assets/category/        ← ピン用カテゴリアイコン（<カテゴリ名>.png）
   models/Ryouunkaku.glb   ← メインの表示モデル
   models/Ryouunkaku.obj   ← 変換元（任意）
 ```
@@ -63,6 +64,15 @@ npm run trim:plateau-asakusa
 - シートは「リンクを知っている全員が閲覧可」である必要があります
 
 情報パネルの注記を出す場合は、マッピングシートに `注記`（または `備考` / `note`）列を追加してください。
+
+## カテゴリアイコン（ピン）
+
+山谷アーカイブと同様、円形ピンにカテゴリアイコンを表示し、地面からの足（ポール）を付けます。
+
+1. `web/assets/category/<カテゴリ名>.png` を置く（シートの `category` 列と同名）
+2. ピン色はスプレッドシート「カテゴリリスト」の **B 列（color）** — セル背景色、または `#RRGGBB` テキスト
+3. 複数カテゴリはカンマ区切りで団子状に重ね表示
+4. アイコンが無い場合は頭文字で代替
 
 ## 写真（複数枚）
 

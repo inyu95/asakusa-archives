@@ -1,11 +1,27 @@
 /* global Cesium */
 
 import {
+  loadCategoryColors,
   loadHistoricPhotos,
   loadMappingContent,
   normalizeSpotName,
 } from "./sheets.js";
 import { attachSpotPhotos } from "./photos.js";
+import {
+  createPinMarkerImageDataUrl,
+} from "./pin-art.js";
+
+/** カテゴリアイコンのベースパス（ファイル名 = カテゴリ名.png） */
+const ASSETS_CATEGORY_BASE = "assets/category/";
+
+/** ピンの足の高さ（m）。spots.json の markerHeight があれば優先 */
+const PIN_POLE_HEIGHT_METERS = 36;
+const PIN_STEM_WIDTH = 1.5;
+const PIN_STEM_COLOR = "#ffffff";
+const PIN_STEM_ALPHA = 0.85;
+
+/** カテゴリ名 → ピン色（カテゴリリスト B 列） */
+let categoryColorByName = new Map();
 
 /**
  * 浅草範囲に絞ったローカル tileset（平坦な葉タイルのみ。REPLACE 階層なし）。
@@ -32,6 +48,13 @@ const INITIAL_VIEW = {
   height: 220,
   heading: 30,
   pitch: -28,
+};
+
+/** スポット解説表示時のカメラ寄りの既定値 */
+const SPOT_FOCUS = {
+  range: 180,
+  pitch: -30,
+  duration: 1.4,
 };
 
 /**
@@ -159,6 +182,7 @@ async function loadAsakusaBuildings(viewer) {
 }
 
 const statusEl = document.getElementById("status");
+const infoBackdrop = document.getElementById("infoBackdrop");
 const infoPanel = document.getElementById("infoPanel");
 const infoClose = document.getElementById("infoClose");
 const infoTitle = document.getElementById("infoTitle");
@@ -173,6 +197,8 @@ const infoGalleryPrev = document.getElementById("infoGalleryPrev");
 const infoGalleryNext = document.getElementById("infoGalleryNext");
 const infoGalleryCounter = document.getElementById("infoGalleryCounter");
 const infoPhotoListToggle = document.getElementById("infoPhotoListToggle");
+const infoPhotoMetaToggle = document.getElementById("infoPhotoMetaToggle");
+const infoPhotoMetaOverlay = document.getElementById("infoPhotoMetaOverlay");
 const infoPhotoList = document.getElementById("infoPhotoList");
 const photoThumbLightbox = document.getElementById("photoThumbLightbox");
 const photoThumbClose = document.getElementById("photoThumbClose");
@@ -180,22 +206,320 @@ const photoThumbSubtitle = document.getElementById("photoThumbSubtitle");
 const photoLightbox = document.getElementById("photoLightbox");
 const lightboxClose = document.getElementById("lightboxClose");
 const lightboxImage = document.getElementById("lightboxImage");
-const lightboxTitle = document.getElementById("lightboxTitle");
-const lightboxMeta = document.getElementById("lightboxMeta");
-const lightboxDescription = document.getElementById("lightboxDescription");
-const lightboxCredit = document.getElementById("lightboxCredit");
+const lightboxImageViewport = document.getElementById("lightboxImageViewport");
 const lightboxPrev = document.getElementById("lightboxPrev");
 const lightboxNext = document.getElementById("lightboxNext");
 const lightboxPhotoListToggle = document.getElementById("lightboxPhotoListToggle");
+const lightboxPhotoMetaToggle = document.getElementById("lightboxPhotoMetaToggle");
+const lightboxPhotoMetaOverlay = document.getElementById("lightboxPhotoMetaOverlay");
 
 /** @type {Map<string, object>} */
 const spotById = new Map();
+
+/** @type {Cesium.Viewer | null} */
+let mapViewer = null;
+
+/**
+ * 解説を開く直前のカメラ。閉じたらここに戻す。
+ * @type {{ destination: Cesium.Cartesian3, orientation: { heading: number, pitch: number, roll: number } } | null}
+ */
+let savedCameraView = null;
 
 /** @type {Array<object>} */
 let galleryImages = [];
 let galleryIndex = 0;
 let lightboxIndex = 0;
 let photoListOpen = false;
+let photoMetaOverlayOpen = false;
+
+const LIGHTBOX_ZOOM_MIN = 1;
+const LIGHTBOX_ZOOM_MAX = 6;
+let lightboxZoom = 1;
+let lightboxPanX = 0;
+let lightboxPanY = 0;
+let lightboxDragging = false;
+/** @type {{ x: number, y: number, panX: number, panY: number } | null} */
+let lightboxDragOrigin = null;
+
+/** @type {object | null} */
+let activeSpot = null;
+
+/** @type {(() => void) | null} */
+let refreshDevPanel = null;
+
+/** カメラ飛行中の古い表示予約を無効化するためのトークン */
+let infoRevealToken = 0;
+
+function isInfoOpen() {
+  return Boolean(
+    infoPanel &&
+      (!infoPanel.classList.contains("hidden") ||
+        infoPanel.classList.contains("is-visible"))
+  );
+}
+
+function isInfoSessionActive() {
+  return Boolean(savedCameraView || activeSpot || isInfoOpen());
+}
+
+function concealInfoPanel() {
+  if (infoPanel) {
+    infoPanel.classList.remove("is-visible");
+    infoPanel.classList.add("hidden");
+  }
+  if (infoBackdrop) {
+    infoBackdrop.classList.remove("is-visible");
+    infoBackdrop.classList.add("hidden");
+    infoBackdrop.hidden = true;
+  }
+}
+
+function revealInfoPanel() {
+  if (!infoPanel) return;
+
+  if (infoBackdrop) {
+    infoBackdrop.hidden = false;
+    infoBackdrop.classList.remove("hidden");
+    void infoBackdrop.offsetWidth;
+    infoBackdrop.classList.add("is-visible");
+  }
+
+  infoPanel.classList.remove("hidden");
+  infoPanel.classList.remove("is-visible");
+  void infoPanel.offsetWidth;
+  requestAnimationFrame(() => {
+    infoPanel.classList.add("is-visible");
+  });
+}
+
+function isDevMode() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("dev") === "1") return true;
+    return window.localStorage.getItem("asakusa-dev") === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * flyToSpot と同じ注視点（モデル位置のやや上空）。
+ * @param {object} spot
+ */
+function getSpotFocusTarget(spot) {
+  const lon = Number.isFinite(spot.modelLon) ? spot.modelLon : spot.lon;
+  const lat = Number.isFinite(spot.modelLat) ? spot.modelLat : spot.lat;
+  const baseHeight = Number.isFinite(spot.height) ? spot.height : 40;
+  // height はモデル接地の楕円体高。建物中腹付近を見る
+  const focusHeight = Number.isFinite(spot.viewFocusHeight)
+    ? spot.viewFocusHeight
+    : baseHeight + 25;
+  return Cesium.Cartesian3.fromDegrees(lon, lat, focusHeight);
+}
+
+/**
+ * カメラ位置から HeadingPitchRange を逆算する（flyToBoundingSphere と一致）。
+ * @param {Cesium.Cartesian3} cameraPosition
+ * @param {Cesium.Cartesian3} target
+ */
+function headingPitchRangeFromPositions(cameraPosition, target) {
+  const transform = Cesium.Transforms.eastNorthUpToFixedFrame(target);
+  const inverse = Cesium.Matrix4.inverseTransformation(
+    transform,
+    new Cesium.Matrix4()
+  );
+  const local = Cesium.Matrix4.multiplyByPoint(
+    inverse,
+    cameraPosition,
+    new Cesium.Cartesian3()
+  );
+  const range = Cesium.Cartesian3.magnitude(local);
+  if (!(range > 1e-3)) return null;
+
+  // Cesium Camera.offsetFromHeadingPitchRange の逆変換
+  const pitch = -Math.asin(Cesium.Math.clamp(local.z / range, -1, 1));
+  const beta = Math.atan2(-local.y, -local.x);
+  const heading = Cesium.Math.zeroToTwoPi(Cesium.Math.PI_OVER_TWO - beta);
+
+  return { heading, pitch, range };
+}
+
+/**
+ * 現在カメラからシート用アングルを取得する。
+ * @param {Cesium.Viewer} viewer
+ * @param {object | null} [spot]
+ */
+function sampleCameraAngle(viewer, spot) {
+  let target = null;
+  if (spot && Number.isFinite(spot.lon) && Number.isFinite(spot.lat)) {
+    target = getSpotFocusTarget(spot);
+  } else {
+    const center = new Cesium.Cartesian2(
+      viewer.canvas.clientWidth / 2,
+      viewer.canvas.clientHeight / 2
+    );
+    const ray = viewer.camera.getPickRay(center);
+    target =
+      (ray && viewer.scene.globe.pick(ray, viewer.scene)) ||
+      viewer.camera.pickEllipsoid(center, viewer.scene.globe.ellipsoid);
+  }
+
+  if (!target) {
+    return {
+      viewHeading: Math.round(Cesium.Math.toDegrees(viewer.camera.heading) * 10) / 10,
+      viewPitch: Math.round(Cesium.Math.toDegrees(viewer.camera.pitch) * 10) / 10,
+      viewRange: null,
+    };
+  }
+
+  const hpr = headingPitchRangeFromPositions(viewer.camera.positionWC, target);
+  if (!hpr) {
+    return { viewHeading: 0, viewPitch: 0, viewRange: null };
+  }
+
+  return {
+    viewHeading: Math.round(Cesium.Math.toDegrees(hpr.heading) * 10) / 10,
+    viewPitch: Math.round(Cesium.Math.toDegrees(hpr.pitch) * 10) / 10,
+    viewRange: Math.round(hpr.range),
+  };
+}
+
+function setupDevPanel(viewer) {
+  const panel = document.getElementById("devPanel");
+  if (!panel || !isDevMode()) return;
+
+  const headingEl = document.getElementById("devHeading");
+  const pitchEl = document.getElementById("devPitch");
+  const rangeEl = document.getElementById("devRange");
+  const spotEl = document.getElementById("devSpotName");
+  const copyBtn = document.getElementById("devCopyAngle");
+  const previewBtn = document.getElementById("devPreviewAngle");
+  const statusEl = document.getElementById("devCopyStatus");
+
+  panel.hidden = false;
+  panel.classList.remove("hidden");
+
+  const refresh = () => {
+    const angle = sampleCameraAngle(viewer, activeSpot);
+    if (headingEl) headingEl.textContent = String(angle.viewHeading);
+    if (pitchEl) pitchEl.textContent = String(angle.viewPitch);
+    if (rangeEl) {
+      rangeEl.textContent =
+        angle.viewRange != null ? String(angle.viewRange) : "—";
+    }
+    if (spotEl) {
+      spotEl.textContent = activeSpot?.name
+        ? `${activeSpot.name}（${activeSpot.id || "idなし"}）`
+        : "スポット未選択（画面中央までの距離）";
+    }
+  };
+
+  viewer.camera.percentageChanged = 0.005;
+  viewer.camera.changed.addEventListener(refresh);
+  viewer.camera.moveEnd.addEventListener(refresh);
+  refreshDevPanel = refresh;
+  refresh();
+
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async () => {
+      const angle = sampleCameraAngle(viewer, activeSpot);
+      if (angle.viewRange == null) {
+        if (statusEl) statusEl.textContent = "距離を取得できませんでした";
+        return;
+      }
+      const tsv = `${angle.viewHeading}\t${angle.viewPitch}\t${angle.viewRange}`;
+      try {
+        await navigator.clipboard.writeText(tsv);
+        if (statusEl) {
+          statusEl.textContent = "コピーしました（viewHeading / Pitch / Range）";
+        }
+      } catch {
+        if (statusEl) statusEl.textContent = `手動コピー: ${tsv}`;
+      }
+      refresh();
+    });
+  }
+
+  if (previewBtn) {
+    previewBtn.addEventListener("click", () => {
+      if (!activeSpot) {
+        if (statusEl) statusEl.textContent = "先にスポットをクリックしてください";
+        return;
+      }
+      const angle = sampleCameraAngle(viewer, activeSpot);
+      if (angle.viewRange == null) {
+        if (statusEl) statusEl.textContent = "距離を取得できませんでした";
+        return;
+      }
+      activeSpot.viewHeading = angle.viewHeading;
+      activeSpot.viewPitch = angle.viewPitch;
+      activeSpot.viewRange = angle.viewRange;
+      flyToSpot(viewer, activeSpot);
+      if (statusEl) {
+        statusEl.textContent =
+          "寄り直し完了。見た目がほぼ同じならコピー値は正しいです";
+      }
+    });
+  }
+
+  window.__asakusaSampleAngle = () => sampleCameraAngle(viewer, activeSpot);
+}
+
+/**
+ * @param {Cesium.Viewer} viewer
+ */
+function captureCameraView(viewer) {
+  return {
+    destination: Cesium.Cartesian3.clone(viewer.camera.positionWC),
+    orientation: {
+      heading: viewer.camera.heading,
+      pitch: viewer.camera.pitch,
+      roll: viewer.camera.roll,
+    },
+  };
+}
+
+/**
+ * @param {Cesium.Viewer} viewer
+ * @param {object} spot
+ * @returns {Promise<boolean>} 完了なら true、キャンセルなら false
+ */
+function flyToSpot(viewer, spot) {
+  const target = getSpotFocusTarget(spot);
+  const heading = Cesium.Math.toRadians(
+    Number.isFinite(spot.viewHeading) ? spot.viewHeading : INITIAL_VIEW.heading
+  );
+  const pitch = Cesium.Math.toRadians(
+    Number.isFinite(spot.viewPitch) ? spot.viewPitch : SPOT_FOCUS.pitch
+  );
+  const range = Number.isFinite(spot.viewRange) ? spot.viewRange : SPOT_FOCUS.range;
+
+  return new Promise((resolve) => {
+    viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 1), {
+      duration: SPOT_FOCUS.duration,
+      offset: new Cesium.HeadingPitchRange(heading, pitch, range),
+      complete: () => {
+        if (refreshDevPanel) refreshDevPanel();
+        resolve(true);
+      },
+      cancel: () => resolve(false),
+    });
+  });
+}
+
+/**
+ * @param {Cesium.Viewer} viewer
+ */
+function restoreCameraView(viewer) {
+  if (!savedCameraView) return;
+  const view = savedCameraView;
+  savedCameraView = null;
+  viewer.camera.flyTo({
+    destination: view.destination,
+    orientation: view.orientation,
+    duration: SPOT_FOCUS.duration,
+  });
+}
 
 function setStatus(message, isError = false) {
   if (!statusEl) return;
@@ -206,14 +530,6 @@ function setStatus(message, isError = false) {
   statusEl.classList.remove("hidden");
   statusEl.classList.toggle("error", isError);
   statusEl.textContent = message;
-}
-
-function formatLightboxMeta(photo) {
-  return [photo.date, photo.creator, photo.genre].filter(Boolean).join(" · ");
-}
-
-function formatPhotoCredit(photo) {
-  return [photo.credit, photo.collection].filter(Boolean).join(" / ");
 }
 
 function isPhotoLightboxOpen() {
@@ -232,14 +548,54 @@ function isPhotoThumbLightboxOpen() {
   );
 }
 
+function fillPhotoMetaOverlay(overlay, photo) {
+  if (!overlay) return;
+  const titleEl = overlay.querySelector(".photo-meta-overlay-title");
+  const dateEl = overlay.querySelector(".photo-meta-overlay-date");
+  const descEl = overlay.querySelector(".photo-meta-overlay-description");
+  if (titleEl) titleEl.textContent = photo?.title || "";
+  if (dateEl) dateEl.textContent = photo?.date || "";
+  if (descEl) descEl.textContent = photo?.description || "";
+}
+
+function syncPhotoMetaToggleState() {
+  const toggles = [infoPhotoMetaToggle, lightboxPhotoMetaToggle].filter(Boolean);
+  const label = "画像の情報を表示します";
+  for (const toggle of toggles) {
+    toggle.setAttribute("aria-expanded", photoMetaOverlayOpen ? "true" : "false");
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("title", label);
+  }
+}
+
+function setPhotoMetaOverlayOpen(open) {
+  photoMetaOverlayOpen = Boolean(open) && galleryImages.length > 0;
+
+  const overlays = [infoPhotoMetaOverlay, lightboxPhotoMetaOverlay].filter(Boolean);
+  for (const overlay of overlays) {
+    overlay.hidden = !photoMetaOverlayOpen;
+    overlay.classList.toggle("hidden", !photoMetaOverlayOpen);
+  }
+
+  syncPhotoMetaToggleState();
+  refreshPhotoMetaOverlayContent();
+}
+
+function refreshPhotoMetaOverlayContent() {
+  if (!galleryImages.length) return;
+  const galleryPhoto = galleryImages[galleryIndex] || galleryImages[0];
+  const lightboxPhoto = galleryImages[lightboxIndex] || galleryImages[0];
+  fillPhotoMetaOverlay(infoPhotoMetaOverlay, galleryPhoto);
+  fillPhotoMetaOverlay(lightboxPhotoMetaOverlay, lightboxPhoto);
+}
+
 function syncPhotoListToggleState() {
   const toggles = [infoPhotoListToggle, lightboxPhotoListToggle].filter(Boolean);
+  const label = "画像の一覧を表示します";
   for (const toggle of toggles) {
     toggle.setAttribute("aria-expanded", photoListOpen ? "true" : "false");
-    toggle.setAttribute(
-      "aria-label",
-      photoListOpen ? "写真一覧を閉じる" : "写真一覧を表示"
-    );
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("title", label);
   }
 }
 
@@ -325,6 +681,25 @@ function renderPhotoList() {
   });
 }
 
+function applyLightboxZoom() {
+  if (!lightboxImage) return;
+  lightboxImage.style.transform =
+    `translate(${lightboxPanX}px, ${lightboxPanY}px) scale(${lightboxZoom})`;
+  if (lightboxImageViewport) {
+    lightboxImageViewport.classList.toggle("is-zoomed", lightboxZoom > 1.01);
+    lightboxImageViewport.classList.toggle("is-dragging", lightboxDragging);
+  }
+}
+
+function resetLightboxZoom() {
+  lightboxZoom = 1;
+  lightboxPanX = 0;
+  lightboxPanY = 0;
+  lightboxDragging = false;
+  lightboxDragOrigin = null;
+  applyLightboxZoom();
+}
+
 function updateLightboxView() {
   if (!isPhotoLightboxOpen()) return;
   const photo = galleryImages[lightboxIndex] || galleryImages[0];
@@ -333,16 +708,12 @@ function updateLightboxView() {
     return;
   }
 
+  resetLightboxZoom();
+
   if (lightboxImage) {
     lightboxImage.src = photo.url;
     lightboxImage.alt = photo.title || "";
   }
-  if (lightboxTitle) lightboxTitle.textContent = photo.title || "";
-  if (lightboxMeta) lightboxMeta.textContent = formatLightboxMeta(photo);
-  if (lightboxDescription) {
-    lightboxDescription.textContent = photo.description || "";
-  }
-  if (lightboxCredit) lightboxCredit.textContent = formatPhotoCredit(photo);
 
   const hasMultiple = galleryImages.length > 1;
   if (lightboxPrev) {
@@ -353,12 +724,14 @@ function updateLightboxView() {
     lightboxNext.classList.toggle("hidden", !hasMultiple);
     lightboxNext.disabled = !hasMultiple;
   }
+  refreshPhotoMetaOverlayContent();
 }
 
 function closePhotoLightbox() {
   if (!photoLightbox) return;
   photoLightbox.classList.add("hidden");
   photoLightbox.hidden = true;
+  resetLightboxZoom();
   if (lightboxImage) lightboxImage.removeAttribute("src");
 }
 
@@ -373,13 +746,169 @@ function openPhotoLightbox(photo) {
   updateLightboxView();
 }
 
+function setupLightboxZoomInteractions() {
+  if (!lightboxImageViewport) return;
+
+  lightboxImageViewport.addEventListener(
+    "wheel",
+    (event) => {
+      if (!isPhotoLightboxOpen()) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const rect = lightboxImageViewport.getBoundingClientRect();
+      const cursorX = event.clientX - rect.left - rect.width / 2;
+      const cursorY = event.clientY - rect.top - rect.height / 2;
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      const nextZoom = Math.min(
+        LIGHTBOX_ZOOM_MAX,
+        Math.max(LIGHTBOX_ZOOM_MIN, lightboxZoom * factor)
+      );
+
+      if (Math.abs(nextZoom - lightboxZoom) < 0.001) return;
+
+      const ratio = nextZoom / lightboxZoom;
+      lightboxPanX = cursorX - (cursorX - lightboxPanX) * ratio;
+      lightboxPanY = cursorY - (cursorY - lightboxPanY) * ratio;
+      lightboxZoom = nextZoom;
+
+      if (lightboxZoom <= 1.01) {
+        lightboxZoom = 1;
+        lightboxPanX = 0;
+        lightboxPanY = 0;
+      }
+      applyLightboxZoom();
+    },
+    { passive: false }
+  );
+
+  lightboxImageViewport.addEventListener("pointerdown", (event) => {
+    if (!isPhotoLightboxOpen() || lightboxZoom <= 1.01) return;
+    if (event.button !== 0) return;
+    lightboxDragging = true;
+    lightboxDragOrigin = {
+      x: event.clientX,
+      y: event.clientY,
+      panX: lightboxPanX,
+      panY: lightboxPanY,
+    };
+    lightboxImageViewport.setPointerCapture(event.pointerId);
+    applyLightboxZoom();
+  });
+
+  lightboxImageViewport.addEventListener("pointermove", (event) => {
+    if (!lightboxDragging || !lightboxDragOrigin) return;
+    lightboxPanX =
+      lightboxDragOrigin.panX + (event.clientX - lightboxDragOrigin.x);
+    lightboxPanY =
+      lightboxDragOrigin.panY + (event.clientY - lightboxDragOrigin.y);
+    applyLightboxZoom();
+  });
+
+  const endDrag = (event) => {
+    if (!lightboxDragging) return;
+    lightboxDragging = false;
+    lightboxDragOrigin = null;
+    try {
+      lightboxImageViewport.releasePointerCapture(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+    applyLightboxZoom();
+  };
+
+  lightboxImageViewport.addEventListener("pointerup", endDrag);
+  lightboxImageViewport.addEventListener("pointercancel", endDrag);
+
+  lightboxImageViewport.addEventListener("dblclick", (event) => {
+    if (!isPhotoLightboxOpen()) return;
+    event.preventDefault();
+    if (lightboxZoom > 1.01) {
+      resetLightboxZoom();
+      return;
+    }
+    const rect = lightboxImageViewport.getBoundingClientRect();
+    const cursorX = event.clientX - rect.left - rect.width / 2;
+    const cursorY = event.clientY - rect.top - rect.height / 2;
+    lightboxZoom = 2.5;
+    lightboxPanX = cursorX * (1 - lightboxZoom);
+    lightboxPanY = cursorY * (1 - lightboxZoom);
+    applyLightboxZoom();
+  });
+}
+
 function hideInfo() {
+  infoRevealToken += 1;
   closePhotoLightbox();
   setPhotoListOpen(false);
-  infoPanel.classList.add("hidden");
+  setPhotoMetaOverlayOpen(false);
+  concealInfoPanel();
   galleryImages = [];
   galleryIndex = 0;
   lightboxIndex = 0;
+  activeSpot = null;
+  if (refreshDevPanel) refreshDevPanel();
+  if (mapViewer) restoreCameraView(mapViewer);
+}
+
+function populateSpotInfo(spot) {
+  infoTitle.textContent = spot.name ?? "";
+  infoYears.textContent =
+    spot.yearFrom && spot.yearTo
+      ? `${spot.yearFrom}–${spot.yearTo}`
+      : spot.yearFrom
+        ? String(spot.yearFrom)
+        : "";
+  infoDescription.textContent = spot.description ?? "";
+  infoNote.textContent = spot.note ?? "";
+
+  infoSources.replaceChildren();
+  for (const source of spot.sources ?? []) {
+    const li = document.createElement("li");
+    if (source.url) {
+      const a = document.createElement("a");
+      a.href = source.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = source.label ?? source.url;
+      li.append(a);
+    } else {
+      li.textContent = source.label ?? "";
+    }
+    infoSources.append(li);
+  }
+
+  galleryImages = Array.isArray(spot.images)
+    ? spot.images.filter((p) => p && p.url)
+    : spot.image
+      ? [{ url: spot.image, title: "" }]
+      : [];
+  galleryIndex = 0;
+  lightboxIndex = 0;
+  setPhotoListOpen(false);
+  setPhotoMetaOverlayOpen(false);
+  updateGalleryView();
+}
+
+async function showSpotInfo(spot) {
+  const token = ++infoRevealToken;
+  activeSpot = spot;
+  if (refreshDevPanel) refreshDevPanel();
+
+  populateSpotInfo(spot);
+  concealInfoPanel();
+
+  if (mapViewer) {
+    if (!savedCameraView) {
+      savedCameraView = captureCameraView(mapViewer);
+    }
+    const finished = await flyToSpot(mapViewer, spot);
+    if (!finished || token !== infoRevealToken) return;
+  } else if (token !== infoRevealToken) {
+    return;
+  }
+
+  revealInfoPanel();
 }
 
 function updateGalleryView() {
@@ -395,10 +924,12 @@ function updateGalleryView() {
       infoImage.removeAttribute("src");
       infoImage.classList.add("hidden");
     }
-    if (infoImageButton) infoImageButton.disabled = true;
     if (infoPhotoListToggle) infoPhotoListToggle.classList.add("hidden");
     if (lightboxPhotoListToggle) lightboxPhotoListToggle.classList.add("hidden");
+    if (infoPhotoMetaToggle) infoPhotoMetaToggle.classList.add("hidden");
+    if (lightboxPhotoMetaToggle) lightboxPhotoMetaToggle.classList.add("hidden");
     setPhotoListOpen(false);
+    setPhotoMetaOverlayOpen(false);
     if (infoPhotoList) infoPhotoList.replaceChildren();
     return;
   }
@@ -409,7 +940,9 @@ function updateGalleryView() {
     infoImage.alt = photo.title || infoTitle?.textContent || "";
     infoImage.classList.remove("hidden");
   }
-  if (infoImageButton) infoImageButton.disabled = false;
+
+  if (infoPhotoMetaToggle) infoPhotoMetaToggle.classList.remove("hidden");
+  if (lightboxPhotoMetaToggle) lightboxPhotoMetaToggle.classList.remove("hidden");
 
   if (infoPhotoListToggle) {
     infoPhotoListToggle.classList.toggle("hidden", !hasMultiple);
@@ -421,6 +954,7 @@ function updateGalleryView() {
     renderPhotoList();
   }
   if (!hasMultiple) setPhotoListOpen(false);
+  refreshPhotoMetaOverlayContent();
 
   if (infoGalleryPrev) {
     infoGalleryPrev.classList.toggle("hidden", !hasMultiple);
@@ -464,46 +998,6 @@ function shiftGallery(delta) {
 function shiftLightbox(delta) {
   if (galleryImages.length <= 1) return;
   selectLightboxPhoto(lightboxIndex + delta);
-}
-
-function showSpotInfo(spot) {
-  infoTitle.textContent = spot.name ?? "";
-  infoYears.textContent =
-    spot.yearFrom && spot.yearTo
-      ? `${spot.yearFrom}–${spot.yearTo}`
-      : spot.yearFrom
-        ? String(spot.yearFrom)
-        : "";
-  infoDescription.textContent = spot.description ?? "";
-  infoNote.textContent = spot.note ?? "";
-
-  infoSources.replaceChildren();
-  for (const source of spot.sources ?? []) {
-    const li = document.createElement("li");
-    if (source.url) {
-      const a = document.createElement("a");
-      a.href = source.url;
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.textContent = source.label ?? source.url;
-      li.append(a);
-    } else {
-      li.textContent = source.label ?? "";
-    }
-    infoSources.append(li);
-  }
-
-  galleryImages = Array.isArray(spot.images)
-    ? spot.images.filter((p) => p && p.url)
-    : spot.image
-      ? [{ url: spot.image, title: "" }]
-      : [];
-  galleryIndex = 0;
-  lightboxIndex = 0;
-  setPhotoListOpen(false);
-  updateGalleryView();
-
-  infoPanel.classList.remove("hidden");
 }
 
 function createGsiImageryProvider() {
@@ -603,6 +1097,15 @@ function mergeSpot(meta, content) {
     category: content.category || "",
     role: content.role || "",
     sources: content.sources || [],
+    viewHeading: Number.isFinite(content.viewHeading)
+      ? content.viewHeading
+      : undefined,
+    viewPitch: Number.isFinite(content.viewPitch)
+      ? content.viewPitch
+      : undefined,
+    viewRange: Number.isFinite(content.viewRange)
+      ? content.viewRange
+      : undefined,
   };
 }
 
@@ -616,7 +1119,7 @@ function slugifyId(name) {
  * 情報パネルの文言・写真・URL・年代とピン位置はシート。モデル位置は JSON。
  */
 async function loadSpots() {
-  const [metas, contents, photoRecords] = await Promise.all([
+  const [metas, contents, photoRecords, categoryColors] = await Promise.all([
     loadSpotsMeta(),
     loadMappingContent().catch((err) => {
       console.warn(
@@ -629,7 +1132,13 @@ async function loadSpots() {
       console.warn("画像データシートの取得に失敗。写真なしで表示します", err);
       return [];
     }),
+    loadCategoryColors().catch((err) => {
+      console.warn("カテゴリ色の取得に失敗。ピンは無彩色で表示します", err);
+      return {};
+    }),
   ]);
+
+  categoryColorByName = new Map(Object.entries(categoryColors || {}));
 
   const usedMetaIds = new Set();
   const spots = [];
@@ -713,13 +1222,40 @@ async function addSpotModel(viewer, spot) {
   return entity;
 }
 
+/** カンマ／全角カンマ区切りのカテゴリ一覧 */
+function parseCategoryList(value) {
+  return String(value || "")
+    .split(/[,、]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/** カテゴリ名 → assets/category/<カテゴリ>.png ＋ カテゴリリストの色 */
+function buildCategoryPinLayers(spot) {
+  const categories = parseCategoryList(spot.category);
+  if (categories.length === 0) {
+    return [
+      {
+        imageUrl: "",
+        borderColor: spot.color || "",
+        label: spot.name || "",
+      },
+    ];
+  }
+  return categories.map((category) => ({
+    imageUrl: ASSETS_CATEGORY_BASE + encodeURIComponent(category) + ".png",
+    borderColor: categoryColorByName.get(category) || spot.color || "",
+    label: category,
+  }));
+}
+
 /**
  * @param {Cesium.Viewer} viewer
  * @param {object} spot
  */
 async function addSpotMarker(viewer, spot) {
-  const markerOffset = spot.markerHeight ?? 55;
-  let height = markerOffset;
+  const poleHeight = spot.markerHeight ?? PIN_POLE_HEIGHT_METERS;
+  let groundH = 0;
   try {
     const carto = Cesium.Cartographic.fromDegrees(spot.lon, spot.lat);
     const sampled = await Cesium.sampleTerrainMostDetailed(
@@ -727,32 +1263,43 @@ async function addSpotMarker(viewer, spot) {
       [carto]
     );
     if (Number.isFinite(sampled[0]?.height)) {
-      height = sampled[0].height + markerOffset;
+      groundH = sampled[0].height;
     }
   } catch (err) {
     console.warn(`ピン用地形サンプリング失敗 (${spot.id})`, err);
   }
 
+  const topH = groundH + poleHeight;
+  const layers = buildCategoryPinLayers(spot);
+  const { dataUrl, width, height: pinHeight } = await createPinMarkerImageDataUrl(
+    spot.name || spot.id || "",
+    layers
+  );
+
+  const groundPos = Cesium.Cartesian3.fromDegrees(spot.lon, spot.lat, groundH);
+  const topPos = Cesium.Cartesian3.fromDegrees(spot.lon, spot.lat, topH);
+
   viewer.entities.add({
     id: `${spot.id}-marker`,
     name: spot.name,
-    position: Cesium.Cartesian3.fromDegrees(spot.lon, spot.lat, height),
-    label: {
-      text: spot.name,
-      font: "14px sans-serif",
-      fillColor: Cesium.Color.WHITE,
-      outlineColor: Cesium.Color.BLACK,
-      outlineWidth: 3,
-      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+    position: topPos,
+    billboard: {
+      image: dataUrl,
+      width,
+      height: pinHeight,
       verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-      pixelOffset: new Cesium.Cartesian2(0, -8),
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      sizeInMeters: false,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      eyeOffset: new Cesium.Cartesian3(0, 0, -8),
     },
-    point: {
-      pixelSize: 10,
-      color: Cesium.Color.fromCssColorString("#c45c26"),
-      outlineColor: Cesium.Color.WHITE,
-      outlineWidth: 2,
+    polyline: {
+      positions: [groundPos, topPos],
+      width: PIN_STEM_WIDTH,
+      material: Cesium.Color.fromCssColorString(PIN_STEM_COLOR).withAlpha(
+        PIN_STEM_ALPHA
+      ),
+      arcType: Cesium.ArcType.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
     },
   });
@@ -778,6 +1325,15 @@ function setupClickHandler(viewer) {
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 }
 
+/**
+ * ピン文字を最大シャープにするため、描画解像度は DPR フル（resolutionScale=1）。
+ * ピンはシーンと同じフレームバッファに描かれるため、ここを下げると必ず荒くなる。
+ */
+function applyViewerResolution(viewer) {
+  viewer.useBrowserRecommendedResolution = false;
+  viewer.resolutionScale = 1;
+}
+
 async function main() {
   if (typeof Cesium === "undefined") {
     setStatus("Cesium の読み込みに失敗しました", true);
@@ -785,6 +1341,9 @@ async function main() {
   }
 
   infoClose.addEventListener("click", hideInfo);
+  if (infoBackdrop) {
+    infoBackdrop.addEventListener("click", hideInfo);
+  }
   if (infoGalleryPrev) {
     infoGalleryPrev.addEventListener("click", () => shiftGallery(-1));
   }
@@ -801,6 +1360,30 @@ async function main() {
     lightboxPhotoListToggle.addEventListener("click", (event) => {
       event.stopPropagation();
       setPhotoListOpen(!photoListOpen);
+    });
+  }
+  if (infoPhotoMetaToggle) {
+    infoPhotoMetaToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPhotoMetaOverlayOpen(!photoMetaOverlayOpen);
+    });
+  }
+  if (lightboxPhotoMetaToggle) {
+    lightboxPhotoMetaToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPhotoMetaOverlayOpen(!photoMetaOverlayOpen);
+    });
+  }
+  if (infoPhotoMetaOverlay) {
+    infoPhotoMetaOverlay.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPhotoMetaOverlayOpen(false);
+    });
+  }
+  if (lightboxPhotoMetaOverlay) {
+    lightboxPhotoMetaOverlay.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPhotoMetaOverlayOpen(false);
     });
   }
   if (infoImageButton) {
@@ -829,6 +1412,7 @@ async function main() {
   if (lightboxNext) {
     lightboxNext.addEventListener("click", () => shiftLightbox(1));
   }
+  setupLightboxZoomInteractions();
   if (photoLightbox) {
     photoLightbox.addEventListener("click", (event) => {
       const target = event.target;
@@ -840,6 +1424,10 @@ async function main() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (isPhotoLightboxOpen()) {
+        if (photoMetaOverlayOpen) {
+          setPhotoMetaOverlayOpen(false);
+          return;
+        }
         closePhotoLightbox();
         return;
       }
@@ -847,7 +1435,11 @@ async function main() {
         setPhotoListOpen(false);
         return;
       }
-      if (infoPanel && !infoPanel.classList.contains("hidden")) {
+      if (photoMetaOverlayOpen) {
+        setPhotoMetaOverlayOpen(false);
+        return;
+      }
+      if (isInfoSessionActive()) {
         hideInfo();
       }
       return;
@@ -857,7 +1449,7 @@ async function main() {
     if (
       !isPhotoLightboxOpen() &&
       !isPhotoThumbLightboxOpen() &&
-      (!infoPanel || infoPanel.classList.contains("hidden"))
+      !isInfoOpen()
     ) {
       return;
     }
@@ -893,10 +1485,10 @@ async function main() {
     targetFrameRate: 60,
   });
 
-  // HiDPI 端末でも描画解像度を抑え、操作中のフレーム落ちを緩和
-  const dpr = window.devicePixelRatio || 1;
-  viewer.resolutionScale = Math.min(1, 1 / Math.sqrt(dpr));
-  viewer.scene.fxaa = true;
+  // ピンを最大シャープにするため DPR フル解像度で描画する
+  applyViewerResolution(viewer);
+  // FXAA は細字・円縁をぼかすのでオフ（ピン優先）
+  viewer.scene.fxaa = false;
   viewer.scene.globe.maximumScreenSpaceError = 2;
   viewer.scene.globe.tileCacheSize = 100;
 
@@ -920,7 +1512,9 @@ async function main() {
     },
   });
 
+  mapViewer = viewer;
   setupClickHandler(viewer);
+  setupDevPanel(viewer);
   window.__asakusaViewer = viewer;
 
   // 地形・建物・スポットを並行開始（地形待ちで建物が止まらないようにする）

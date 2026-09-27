@@ -4,6 +4,9 @@ import { parseGvizRows } from "./gviz.js";
 export const SHEET_ID = "1CJfTgaM-C0iL7YGpSJVuTUNn9JkpKs5O7dypYBJ1oAA";
 export const SHEET_MAPPING = "マッピング";
 export const SHEET_PHOTOS = "画像データ";
+export const SHEET_CATEGORIES = "カテゴリリスト";
+/** セル背景色の取得用（公開シートの読み取り専用） */
+const GOOGLE_SHEETS_API_KEY = "AIzaSyAj3HmCQbFFqq1G7L9OhLMW2yT8cTJckJc";
 const SHEET_FETCH_TIMEOUT_MS = 30000;
 const SHEET_FETCH_MAX_RETRIES = 2;
 
@@ -67,6 +70,13 @@ function resolveColumnIndex(headerMap, key, fallback) {
     : fallback;
 }
 
+function parseOptionalNumber(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : null;
+}
+
 function getColumnIndexes(rows) {
   const defaults = {
     id: -1,
@@ -81,6 +91,9 @@ function getColumnIndexes(rows) {
     closingYear: 8,
     category: 9,
     role: 10,
+    viewHeading: -1,
+    viewPitch: -1,
+    viewRange: -1,
   };
   if (!rows || rows.length === 0) return defaults;
 
@@ -134,6 +147,12 @@ function getColumnIndexes(rows) {
       header === "アクティビティ"
     )
       headerMap.role = i;
+    else if (header === "viewheading" || header === "カメラ方位")
+      headerMap.viewHeading = i;
+    else if (header === "viewpitch" || header === "カメラ俯角")
+      headerMap.viewPitch = i;
+    else if (header === "viewrange" || header === "カメラ距離")
+      headerMap.viewRange = i;
   }
 
   const indexes = {};
@@ -196,6 +215,18 @@ function parseRows(rows) {
       yearTo: String(cellValue(c[col.closingYear]) || "").trim(),
       category: String(cellValue(c[col.category]) || "").trim(),
       role: String(cellValue(c[col.role]) || "").trim(),
+      viewHeading:
+        col.viewHeading >= 0
+          ? parseOptionalNumber(cellValue(c[col.viewHeading]))
+          : null,
+      viewPitch:
+        col.viewPitch >= 0
+          ? parseOptionalNumber(cellValue(c[col.viewPitch]))
+          : null,
+      viewRange:
+        col.viewRange >= 0
+          ? parseOptionalNumber(cellValue(c[col.viewRange]))
+          : null,
       sources,
     });
   }
@@ -242,6 +273,116 @@ function fetchSheetData(sheetName, retryCount) {
 export async function loadMappingContent() {
   const rows = await fetchSheetData(SHEET_MAPPING);
   return parseRows(rows);
+}
+
+function isCssColorText(value) {
+  const text = String(value || "").trim();
+  return (
+    /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(text) ||
+    /^rgba?\(/i.test(text)
+  );
+}
+
+function sheetsApiColorToCss(color) {
+  if (!color) return "";
+  const r = Math.round((color.red ?? 1) * 255);
+  const g = Math.round((color.green ?? 1) * 255);
+  const b = Math.round((color.blue ?? 1) * 255);
+  if (r >= 254 && g >= 254 && b >= 254) return "";
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function getCellBackgroundCss(valueCell) {
+  if (!valueCell) return "";
+  const bg =
+    (valueCell.effectiveFormat && valueCell.effectiveFormat.backgroundColor) ||
+    (valueCell.userEnteredFormat && valueCell.userEnteredFormat.backgroundColor);
+  return sheetsApiColorToCss(bg);
+}
+
+/** GViz: B 列に #hex / rgb が書いてあればそれを使う */
+function parseCategoryColorsFromGviz(rows) {
+  const colors = {};
+  for (const row of rows || []) {
+    const c = row.c || [];
+    const name = String(cellValue(c[0]) || "").trim();
+    if (!name || name.indexOf("一覧") !== -1) continue;
+    const text = String(cellValue(c[1]) || "").trim();
+    if (text.toLowerCase() === "color" || text.toLowerCase() === "色") continue;
+    if (isCssColorText(text)) colors[name] = text;
+  }
+  return colors;
+}
+
+/** Sheets API: B 列セルの背景色をカテゴリ色として読む */
+async function fetchCategoryColorsFromSheetsApi() {
+  if (!GOOGLE_SHEETS_API_KEY) return {};
+
+  const range = encodeURIComponent(`${SHEET_CATEGORIES}!A1:B100`);
+  const fields = encodeURIComponent(
+    "sheets(data(rowData(values(formattedValue,effectiveFormat(backgroundColor),userEnteredFormat(backgroundColor)))))"
+  );
+  const url =
+    "https://sheets.googleapis.com/v4/spreadsheets/" +
+    SHEET_ID +
+    "?ranges=" +
+    range +
+    "&fields=" +
+    fields +
+    "&key=" +
+    encodeURIComponent(GOOGLE_SHEETS_API_KEY);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SHEET_FETCH_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn("カテゴリ色 API エラー:", res.status);
+      return {};
+    }
+    const json = await res.json();
+    const rowData =
+      json?.sheets?.[0]?.data?.[0]?.rowData || [];
+    const colors = {};
+    for (const row of rowData) {
+      const values = row.values || [];
+      if (values.length < 2) continue;
+      const name = String(values[0]?.formattedValue || "").trim();
+      if (!name || name.indexOf("一覧") !== -1) continue;
+      const text = String(values[1]?.formattedValue || "").trim();
+      if (text && isCssColorText(text)) {
+        colors[name] = text;
+        continue;
+      }
+      const bg = getCellBackgroundCss(values[1]);
+      if (bg) colors[name] = bg;
+    }
+    return colors;
+  } catch (err) {
+    clearTimeout(timer);
+    console.warn("カテゴリ色の取得に失敗:", err);
+    return {};
+  }
+}
+
+/**
+ * カテゴリリストの B 列（color）からカテゴリ名 → CSS 色のマップを返す。
+ * セル文字（#hex）があれば優先。なければセル背景色。
+ */
+export async function loadCategoryColors() {
+  const [rows, apiColors] = await Promise.all([
+    fetchSheetData(SHEET_CATEGORIES).catch((err) => {
+      console.warn("カテゴリリストの取得に失敗:", err);
+      return [];
+    }),
+    fetchCategoryColorsFromSheetsApi(),
+  ]);
+  return {
+    ...parseCategoryColorsFromGviz(rows),
+    ...apiColors,
+  };
 }
 
 function isPhotoHeaderRow(c) {
