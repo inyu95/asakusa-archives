@@ -1,5 +1,6 @@
-/** Google Visualization（gviz）レスポンスを行配列にパースする */
-export function parseGvizRows(text) {
+/** Google Visualization（gviz）レスポンスをパースする */
+
+function parseGvizJson(text) {
   const normalized = String(text || "")
     .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
@@ -29,5 +30,19 @@ export function parseGvizRows(text) {
     throw new Error(detail || "SHEET_ERROR");
   }
 
-  return json.table && json.table.rows ? json.table.rows : [];
+  return json;
+}
+
+/** @returns {{ rows: object[], cols: object[] }} */
+export function parseGvizTable(text) {
+  const json = parseGvizJson(text);
+  return {
+    rows: json.table && json.table.rows ? json.table.rows : [],
+    cols: json.table && json.table.cols ? json.table.cols : [],
+  };
+}
+
+/** 行配列のみ（後方互換） */
+export function parseGvizRows(text) {
+  return parseGvizTable(text).rows;
 }

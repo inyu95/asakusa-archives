@@ -34,19 +34,22 @@ web/
   js/photos.js            ← 写真フォルダ解決
   js/gviz.js
   data/spots.json         ← Unity モデル配置のみ（lat/lon・scale など）
-  data/plateau-asakusa-bldg-lod2.json ← 浅草範囲 PLATEAU 建物（LOD2・平坦タイル）
+  data/plateau-asakusa-bldg-lod2.json ← 台東区建物（浅草寺中心・半径1km円・LOD2）
+  data/plateau-sumida-bldg-lod2.json  ← 墨田区建物（同円・隅田川対岸）
+  data/plateau-taito-brid-lod2.json   ← 台東区橋梁（同円・吾妻橋など）
   assets/photos/          ← スポット写真（フォルダ単位）
   assets/category/        ← ピン用カテゴリアイコン（<カテゴリ名>.png）
   models/Ryouunkaku.glb   ← メインの表示モデル
   models/Ryouunkaku.obj   ← 変換元（任意）
 ```
 
-周辺建物は台東区全体の tileset ではなく、浅草付近の z17 葉タイルだけを平坦に並べた `data/plateau-asakusa-bldg-lod2.json` を使います（親↔子の REPLACE による欠けを避けます）。更新する場合:
+周辺の 3D 都市モデルは自治体全体ではなく、浅草寺（139.796750, 35.71472）を中心とした半径 1 km の円と交差する葉タイルだけを平坦に並べたローカル tileset を使います（親↔子の REPLACE による欠けを避け、表示時に `ClippingPolygon` で円境界に整形）。更新する場合:
 
 ```bash
 npm run trim:plateau-asakusa
 ```
 
+（台東建物・墨田建物・台東橋梁をまとめて再生成。個別は `trim:plateau-taito-bldg` など）
 ## データ分担
 
 | ソース | 役割 |
@@ -71,8 +74,9 @@ npm run trim:plateau-asakusa
 
 1. `web/assets/category/<カテゴリ名>.png` を置く（シートの `category` 列と同名）
 2. ピン色はスプレッドシート「カテゴリリスト」の **B 列（color）** — セル背景色、または `#RRGGBB` テキスト
-3. 複数カテゴリはカンマ区切りで団子状に重ね表示
-4. アイコンが無い場合は頭文字で代替
+3. 足の長さはマッピングの **ピン長さ** 列（メートル）。未設定時は 36 m
+4. 複数カテゴリはカンマ区切りで団子状に重ね表示
+5. アイコンが無い場合は頭文字で代替
 
 ## 写真（複数枚）
 
@@ -115,13 +119,14 @@ dotnet run -c Release --project tools/ObjToGlb/ObjToGlb.csproj -- web/models/Ryo
 
 ## データ出典
 
-- 3D都市モデル: [Project PLATEAU](https://www.mlit.go.jp/plateau/)（台東区 2025・浅草範囲のみ表示）
+- 3D都市モデル: [Project PLATEAU](https://www.mlit.go.jp/plateau/)（台東区・墨田区 2025・浅草寺中心・半径1km円。建築物＋橋梁）
 - 地形: [PLATEAU-Terrain](https://docs.plateauview.mlit.go.jp/datasets/terrain/)（楕円体高・ジオイド補正済み）
 - 航空写真: 地理院タイル（シームレス写真）
 
 ## 表示の注意
 
-- **浅草内**: PLATEAU 建物＋歴史スポット（`trim:plateau-asakusa` で葉タイルのみ抽出）。
-- **浅草外**: 3D 建物タイル自体が無いので、地形・航空写真のみ。
+- **円内（浅草寺中心・半径1km）**: 台東・墨田の建物、台東の橋梁、歴史スポット（`trim:plateau-asakusa` で葉タイル抽出後、`ClippingPolygon` で円境界に整形）。
+- **円外**: 3D 都市モデルはクリップされ、地形・航空写真のみ。
+- 墨田区の橋梁タイルは円と交差する葉が無いため未収録（吾妻橋などは台東区 `brid` に含まれる）。
 - 復元モデルの接地のため PLATEAU-Terrain を使います。
 - 建物の見え方は [PLATEAU VIEW](https://plateauview.mlit.go.jp/) に合わせ、Cesium **1.118**＋公式相当の IBL を使います（UNLIT / 色加算はしません）。

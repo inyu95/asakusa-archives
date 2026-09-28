@@ -1,4 +1,4 @@
-import { parseGvizRows } from "./gviz.js";
+import { parseGvizTable } from "./gviz.js";
 
 /** 浅草タイムトラベル — コンテンツ用スプレッドシート */
 export const SHEET_ID = "1CJfTgaM-C0iL7YGpSJVuTUNn9JkpKs5O7dypYBJ1oAA";
@@ -77,7 +77,7 @@ function parseOptionalNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-function getColumnIndexes(rows) {
+function getColumnIndexes(rows, cols) {
   const defaults = {
     id: -1,
     name: 0,
@@ -94,13 +94,27 @@ function getColumnIndexes(rows) {
     viewHeading: -1,
     viewPitch: -1,
     viewRange: -1,
+    pinLength: -1,
   };
-  if (!rows || rows.length === 0) return defaults;
 
-  const headerRow = rows[0].c || [];
+  const headerLabels = [];
+  // GViz は parsedNumHeaders=1 のときヘッダーを cols[].label に移し、rows から除く
+  if (cols && cols.length > 0) {
+    for (let i = 0; i < cols.length; i++) {
+      headerLabels[i] = cols[i]?.label ?? "";
+    }
+  }
+  const hasColLabels = headerLabels.some((label) => String(label || "").trim());
+  if (!hasColLabels && rows && rows.length > 0) {
+    const headerRow = rows[0].c || [];
+    for (let i = 0; i < headerRow.length; i++) {
+      headerLabels[i] = cellValue(headerRow[i]);
+    }
+  }
+
   const headerMap = {};
-  for (let i = 0; i < headerRow.length; i++) {
-    const header = normalizeHeaderText(cellValue(headerRow[i]));
+  for (let i = 0; i < headerLabels.length; i++) {
+    const header = normalizeHeaderText(headerLabels[i]);
     if (!header) continue;
 
     if (header === "id" || header === "スポットid") headerMap.id = i;
@@ -153,6 +167,13 @@ function getColumnIndexes(rows) {
       headerMap.viewPitch = i;
     else if (header === "viewrange" || header === "カメラ距離")
       headerMap.viewRange = i;
+    else if (
+      header === "ピン長さ" ||
+      header === "pinlength" ||
+      header === "pinheight" ||
+      header === "ポール高さ"
+    )
+      headerMap.pinLength = i;
   }
 
   const indexes = {};
@@ -176,9 +197,9 @@ function isDirectImagePath(value) {
   return /\.(jpe?g|png|gif|webp|svg|bmp)$/i.test(text);
 }
 
-function parseRows(rows) {
+function parseRows(rows, cols) {
   const list = [];
-  const col = getColumnIndexes(rows);
+  const col = getColumnIndexes(rows, cols);
 
   for (let index = 0; index < rows.length; index++) {
     const c = rows[index].c || [];
@@ -227,6 +248,10 @@ function parseRows(rows) {
         col.viewRange >= 0
           ? parseOptionalNumber(cellValue(c[col.viewRange]))
           : null,
+      pinLength:
+        col.pinLength >= 0
+          ? parseOptionalNumber(cellValue(c[col.pinLength]))
+          : null,
       sources,
     });
   }
@@ -249,7 +274,7 @@ function fetchSheetData(sheetName, retryCount) {
       if (!res.ok) throw new Error("SHEET_HTTP_" + res.status);
       return res.text();
     })
-    .then((text) => parseGvizRows(text))
+    .then((text) => parseGvizTable(text))
     .catch((err) => {
       clearTimeout(timer);
       const canRetry =
@@ -271,8 +296,8 @@ function fetchSheetData(sheetName, retryCount) {
 
 /** マッピングシートのコンテンツ行を取得する */
 export async function loadMappingContent() {
-  const rows = await fetchSheetData(SHEET_MAPPING);
-  return parseRows(rows);
+  const { rows, cols } = await fetchSheetData(SHEET_MAPPING);
+  return parseRows(rows, cols);
 }
 
 function isCssColorText(value) {
@@ -285,19 +310,23 @@ function isCssColorText(value) {
 
 function sheetsApiColorToCss(color) {
   if (!color) return "";
-  const r = Math.round((color.red ?? 1) * 255);
-  const g = Math.round((color.green ?? 1) * 255);
-  const b = Math.round((color.blue ?? 1) * 255);
-  if (r >= 254 && g >= 254 && b >= 254) return "";
+  // Sheets API は 0 のチャンネルを省略することがある。欠落は 0（昔の ?? 1 だと色がずれる）
+  const r = Math.round((color.red ?? 0) * 255);
+  const g = Math.round((color.green ?? 0) * 255);
+  const b = Math.round((color.blue ?? 0) * 255);
+  // 未設定セルの白背景は無視
+  if (r >= 250 && g >= 250 && b >= 250) return "";
   return `rgb(${r}, ${g}, ${b})`;
 }
 
 function getCellBackgroundCss(valueCell) {
   if (!valueCell) return "";
-  const bg =
-    (valueCell.effectiveFormat && valueCell.effectiveFormat.backgroundColor) ||
-    (valueCell.userEnteredFormat && valueCell.userEnteredFormat.backgroundColor);
-  return sheetsApiColorToCss(bg);
+  const format =
+    valueCell.effectiveFormat || valueCell.userEnteredFormat || null;
+  if (!format) return "";
+  const styleRgb = format.backgroundColorStyle && format.backgroundColorStyle.rgbColor;
+  if (styleRgb) return sheetsApiColorToCss(styleRgb);
+  return sheetsApiColorToCss(format.backgroundColor);
 }
 
 /** GViz: B 列に #hex / rgb が書いてあればそれを使う */
@@ -320,7 +349,7 @@ async function fetchCategoryColorsFromSheetsApi() {
 
   const range = encodeURIComponent(`${SHEET_CATEGORIES}!A1:B100`);
   const fields = encodeURIComponent(
-    "sheets(data(rowData(values(formattedValue,effectiveFormat(backgroundColor),userEnteredFormat(backgroundColor)))))"
+    "sheets(data(rowData(values(formattedValue,effectiveFormat(backgroundColor,backgroundColorStyle),userEnteredFormat(backgroundColor,backgroundColorStyle)))))"
   );
   const url =
     "https://sheets.googleapis.com/v4/spreadsheets/" +
@@ -368,19 +397,51 @@ async function fetchCategoryColorsFromSheetsApi() {
 }
 
 /**
+ * カテゴリリスト A 列の表示順一覧。
+ * @returns {Promise<string[]>}
+ */
+export async function loadCategoryList() {
+  try {
+    const table = await fetchSheetData(SHEET_CATEGORIES);
+    const list = [];
+    const seen = new Set();
+    for (const row of table.rows || []) {
+      const c = row.c || [];
+      const name = String(cellValue(c[0]) || "").trim();
+      if (!name || name.indexOf("一覧") !== -1) continue;
+      const lower = name.toLowerCase();
+      if (
+        lower === "category" ||
+        lower === "カテゴリ" ||
+        name === "カテゴリ名"
+      ) {
+        continue;
+      }
+      if (seen.has(name)) continue;
+      seen.add(name);
+      list.push(name);
+    }
+    return list;
+  } catch (err) {
+    console.warn("カテゴリ一覧の取得に失敗:", err);
+    return [];
+  }
+}
+
+/**
  * カテゴリリストの B 列（color）からカテゴリ名 → CSS 色のマップを返す。
  * セル文字（#hex）があれば優先。なければセル背景色。
  */
 export async function loadCategoryColors() {
-  const [rows, apiColors] = await Promise.all([
+  const [table, apiColors] = await Promise.all([
     fetchSheetData(SHEET_CATEGORIES).catch((err) => {
       console.warn("カテゴリリストの取得に失敗:", err);
-      return [];
+      return { rows: [], cols: [] };
     }),
     fetchCategoryColorsFromSheetsApi(),
   ]);
   return {
-    ...parseCategoryColorsFromGviz(rows),
+    ...parseCategoryColorsFromGviz(table.rows || []),
     ...apiColors,
   };
 }
@@ -400,7 +461,7 @@ function isPhotoHeaderRow(c) {
   );
 }
 
-function getPhotoColumnIndexes(rows) {
+function getPhotoColumnIndexes(rows, cols) {
   const defaults = {
     folder: 0,
     file: 1,
@@ -414,14 +475,33 @@ function getPhotoColumnIndexes(rows) {
     genre: 9,
     pitch: 10,
   };
-  if (!rows || rows.length === 0) return defaults;
 
-  const headerRow = rows[0].c || [];
-  if (!isPhotoHeaderRow(headerRow)) return defaults;
+  const headerLabels = [];
+  if (cols && cols.length > 0) {
+    for (let i = 0; i < cols.length; i++) {
+      headerLabels[i] = cols[i]?.label ?? "";
+    }
+  }
+  const hasColLabels = headerLabels.some((label) => String(label || "").trim());
+  if (!hasColLabels && rows && rows.length > 0) {
+    const headerRow = rows[0].c || [];
+    for (let i = 0; i < headerRow.length; i++) {
+      headerLabels[i] = cellValue(headerRow[i]);
+    }
+  }
+
+  // ヘッダーらしきラベルが無いときは既定列順
+  const probe = headerLabels.map((v) => {
+    const cell = { v: v };
+    return cell;
+  });
+  if (!isPhotoHeaderRow(probe) && !(cols && cols.length > 0 && hasColLabels)) {
+    return defaults;
+  }
 
   const headerMap = {};
-  for (let i = 0; i < headerRow.length; i++) {
-    const header = normalizeHeaderText(cellValue(headerRow[i]));
+  for (let i = 0; i < headerLabels.length; i++) {
+    const header = normalizeHeaderText(headerLabels[i]);
     if (!header) continue;
 
     if (
@@ -476,6 +556,9 @@ function getPhotoColumnIndexes(rows) {
     else if (header === "pitch") headerMap.pitch = i;
   }
 
+  // cols ラベルがある場合は headerMap が空でも defaults にフォールバック
+  if (Object.keys(headerMap).length === 0) return defaults;
+
   const indexes = {};
   Object.keys(defaults).forEach((key) => {
     indexes[key] = resolveColumnIndex(headerMap, key, defaults[key]);
@@ -490,9 +573,9 @@ function parsePhotoOrder(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-function parsePhotoRows(rows) {
+function parsePhotoRows(rows, cols) {
   const list = [];
-  const col = getPhotoColumnIndexes(rows);
+  const col = getPhotoColumnIndexes(rows, cols);
 
   for (let index = 0; index < rows.length; index++) {
     const c = rows[index].c || [];
@@ -522,8 +605,8 @@ function parsePhotoRows(rows) {
 
 /** 画像データシートの行を取得する（フォルダパス＋データ名が正） */
 export async function loadHistoricPhotos() {
-  const rows = await fetchSheetData(SHEET_PHOTOS);
-  return parsePhotoRows(rows);
+  const { rows, cols } = await fetchSheetData(SHEET_PHOTOS);
+  return parsePhotoRows(rows, cols);
 }
 
 /** 表示名の照合用（括弧以降を除く） */

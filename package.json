@@ -7,6 +7,9 @@
     "serve": "npx --yes serve web -p 5173",
     "serve:dotnet": "dotnet run -c Release --project tools/StaticServer/StaticServer.csproj -- web 5173",
     "convert:ryounkaku": "dotnet run -c Release --project tools/ObjToGlb/ObjToGlb.csproj -- web/models/Ryouunkaku.obj web/models/Ryouunkaku.glb 0.18",
-    "trim:plateau-asakusa": "dotnet run -c Release --project tools/TrimPlateauTileset/TrimPlateauTileset.csproj -- https://assets.cms.plateau.reearth.io/assets/75/76c6bc-df54-4bf4-a869-b513526b5bd2/13106_taito-ku_city_2025_citygml_1_op_bldg_3dtiles_lod2/tileset.json web/data/plateau-asakusa-bldg-lod2.json 139.787 35.707 139.804 35.723 17"
+    "trim:plateau-taito-bldg": "dotnet run -c Release --project tools/TrimPlateauTileset/TrimPlateauTileset.csproj -- https://assets.cms.plateau.reearth.io/assets/75/76c6bc-df54-4bf4-a869-b513526b5bd2/13106_taito-ku_city_2025_citygml_1_op_bldg_3dtiles_lod2/tileset.json web/data/plateau-asakusa-bldg-lod2.json 139.796750 35.71472 1000 17",
+    "trim:plateau-sumida-bldg": "dotnet run -c Release --project tools/TrimPlateauTileset/TrimPlateauTileset.csproj -- https://assets.cms.plateau.reearth.io/assets/9d/d19b09-1e4d-4315-804b-d62c0124f1e3/13107_sumida-ku_pref_2025_citygml_1_op_bldg_3dtiles_13107_sumida-ku_lod2/tileset.json web/data/plateau-sumida-bldg-lod2.json 139.796750 35.71472 1000 -1",
+    "trim:plateau-taito-brid": "dotnet run -c Release --project tools/TrimPlateauTileset/TrimPlateauTileset.csproj -- https://assets.cms.plateau.reearth.io/assets/ae/6dcdeb-fe04-4853-ba66-02993dacc87c/13106_taito-ku_city_2025_citygml_1_op_brid_3dtiles_lod2/tileset.json web/data/plateau-taito-brid-lod2.json 139.796750 35.71472 1000 -1",
+    "trim:plateau-asakusa": "npm run trim:plateau-taito-bldg && npm run trim:plateau-sumida-bldg && npm run trim:plateau-taito-brid"
   }
 }

@@ -8,7 +8,7 @@ const PIN_RENDER_SCALE = 16;
  * outerR = size/2 - 1 に合わせ、円が重ならず外縁で接する距離。
  */
 const PIN_DANGO_SPACING = PIN_CIRCLE_SIZE - 2;
-const PIN_ART_CACHE_VERSION = "category-hires-v1";
+const PIN_ART_CACHE_VERSION = "category-color-fix-v2";
 const PIN_WHITE_BORDER_WIDTH = 2;
 const PIN_ICON_PADDING = 6;
 const DEFAULT_PIN_BORDER_COLOR = "#ffffff";
@@ -73,8 +73,6 @@ function drawPinWhiteRing(ctx, cx, cy, size) {
 function drawInitialContent(c, cx, cy, innerR, text) {
   const initial = (text || "?").trim().charAt(0).toUpperCase();
   const size = innerR * 2;
-  c.fillStyle = "#888888";
-  c.fillRect(cx - innerR, cy - innerR, size, size);
   c.fillStyle = "#ffffff";
   c.font = "bold " + Math.round(size * 0.42) + "px sans-serif";
   c.textAlign = "center";
@@ -82,17 +80,48 @@ function drawInitialContent(c, cx, cy, innerR, text) {
   c.fillText(initial, cx, cy + 2);
 }
 
+/**
+ * カテゴリアイコン（白シルエット／黒背景）を白だけ残して描く。
+ * 黒・暗い背景は透過し、シートのカテゴリ色がピン下地として見えるようにする。
+ */
 function drawImageContent(c, cx, cy, innerR, img) {
-  const contentSize = innerR * 2;
+  const contentSize = Math.max(1, Math.round(innerR * 2));
   const min = Math.min(img.width, img.height);
   const sx = (img.width - min) / 2;
   const sy = (img.height - min) / 2;
+
+  const tmp = document.createElement("canvas");
+  tmp.width = contentSize;
+  tmp.height = contentSize;
+  const tctx = tmp.getContext("2d");
+  tctx.imageSmoothingEnabled = true;
+  tctx.imageSmoothingQuality = "high";
+  tctx.drawImage(img, sx, sy, min, min, 0, 0, contentSize, contentSize);
+
+  const imageData = tctx.getImageData(0, 0, contentSize, contentSize);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
+    if (a < 8) {
+      data[i + 3] = 0;
+      continue;
+    }
+    const lum = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+    // 明るい部分（白シルエット）だけ白で残す。黒い下地は捨てる
+    if (lum < 40) {
+      data[i + 3] = 0;
+    } else {
+      const strength = Math.min(1, (lum - 40) / 180);
+      data[i] = 255;
+      data[i + 1] = 255;
+      data[i + 2] = 255;
+      data[i + 3] = Math.round(a * strength);
+    }
+  }
+  tctx.putImageData(imageData, 0, 0);
+
   c.drawImage(
-    img,
-    sx,
-    sy,
-    min,
-    min,
+    tmp,
     cx - contentSize / 2,
     cy - contentSize / 2,
     contentSize,

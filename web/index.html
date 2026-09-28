@@ -4,85 +4,261 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>浅草タイムトラベル</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@600;700&display=swap"
+    rel="stylesheet"
+  />
   <script src="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Cesium.js"></script>
   <link
     href="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Widgets/widgets.css"
     rel="stylesheet"
   />
   <link rel="stylesheet" href="css/style.css" />
+  <script
+    type="module"
+    src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"
+  ></script>
 </head>
-<body>
+<body class="is-intro">
+  <div id="introSplash" class="intro-splash" aria-hidden="false">
+    <div class="intro-splash-inner">
+      <div class="intro-splash-titles">
+        <p class="intro-splash-brand">浅草タイムトラベル</p>
+        <p class="intro-splash-subtitle">―歴史と文学を巡る旅―</p>
+      </div>
+      <div class="intro-splash-loading">
+        <p class="partner-credit intro-splash-credit" aria-label="台東区×プラトー">
+          <span class="partner-logo-wrap">
+            <img
+              class="partner-logo partner-logo--taito"
+              src="assets/logos/taito.png"
+              alt="台東区"
+            />
+          </span>
+          <span class="partner-credit-x" aria-hidden="true">×</span>
+          <span class="partner-logo-wrap">
+            <img
+              class="partner-logo partner-logo--plateau"
+              src="assets/logos/plateau.jpg"
+              alt="PLATEAU by MLIT"
+            />
+          </span>
+        </p>
+        <div
+          class="intro-splash-progress"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="4"
+          aria-labelledby="introSplashStatus"
+        >
+          <div id="introSplashProgressBar" class="intro-splash-progress-bar"></div>
+        </div>
+        <p id="introSplashStatus" class="intro-splash-status" aria-live="polite">
+          浅草を読み込み中…
+        </p>
+      </div>
+    </div>
+  </div>
+
   <div id="cesiumContainer"></div>
 
   <header class="topbar">
     <div class="brand">浅草タイムトラベル</div>
-    <p class="tagline">浅草の街並 × 歴史スポット</p>
+    <p class="brand-subtitle">―歴史と文学を巡る旅―</p>
+    <p class="partner-credit topbar-credit" aria-label="台東区×プラトー">
+      <span class="partner-logo-wrap">
+        <img
+          class="partner-logo partner-logo--taito"
+          src="assets/logos/taito.png"
+          alt="台東区"
+        />
+      </span>
+      <span class="partner-credit-x" aria-hidden="true">×</span>
+      <span class="partner-logo-wrap">
+        <img
+          class="partner-logo partner-logo--plateau"
+          src="assets/logos/plateau.jpg"
+          alt="PLATEAU by MLIT"
+        />
+      </span>
+    </p>
   </header>
+
+  <div id="leftPanel" class="left-panel">
+    <div id="searchPanel" class="search-panel">
+      <div class="search-field">
+        <svg class="search-field-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+          <path
+            fill="currentColor"
+            d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
+          />
+        </svg>
+        <input
+          type="search"
+          id="pinSearch"
+          placeholder="キーワードで検索"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <span id="searchCount" class="search-count"></span>
+    </div>
+
+    <div id="filterPanel" class="filter-panel">
+      <button
+        type="button"
+        id="filterToggle"
+        class="filter-panel-header"
+        aria-expanded="true"
+        aria-controls="filterPanelBody"
+      >
+        フィルター
+        <span class="filter-toggle-icon" aria-hidden="true"></span>
+      </button>
+      <div id="filterPanelBody" class="filter-panel-body">
+        <div class="filter-group">
+          <h4>カテゴリ</h4>
+          <div id="categoryFilters" class="tag-list"></div>
+        </div>
+        <button id="filterClear" type="button">クリア</button>
+      </div>
+    </div>
+  </div>
 
   <div id="status" class="status">読み込み中…</div>
 
   <div id="infoBackdrop" class="info-backdrop hidden" hidden></div>
-  <aside id="infoPanel" class="info-panel hidden" aria-live="polite">
-    <button type="button" id="infoClose" class="info-close" aria-label="閉じる">×</button>
-    <h1 id="infoTitle"></h1>
-    <p id="infoYears" class="info-years"></p>
-    <div id="infoGallery" class="info-gallery hidden">
-      <div id="infoGalleryStage" class="info-gallery-stage">
-        <button
-          type="button"
-          id="infoImageButton"
-          class="info-image-frame"
-          aria-label="写真を全画面表示"
-        >
-          <img id="infoImage" alt="" class="info-image" />
-        </button>
-        <div id="infoPhotoMetaOverlay" class="photo-meta-overlay hidden" hidden>
-          <h3 class="photo-meta-overlay-title"></h3>
-          <p class="photo-meta-overlay-date"></p>
-          <p class="photo-meta-overlay-description"></p>
-        </div>
-        <div class="info-gallery-toolbar">
-          <button
-            type="button"
-            id="infoPhotoMetaToggle"
-            class="info-photo-tool-btn hidden"
-            aria-label="画像の情報を表示します"
-            title="画像の情報を表示します"
-            aria-expanded="false"
-            aria-controls="infoPhotoMetaOverlay"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
-              <path fill="currentColor" d="M11 10h2v7h-2zm0-4h2v2h-2z" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            id="infoPhotoListToggle"
-            class="info-photo-tool-btn hidden"
-            aria-label="画像の一覧を表示します"
-            title="画像の一覧を表示します"
-            aria-expanded="false"
-            aria-controls="photoThumbLightbox"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"
-              />
-            </svg>
-          </button>
-        </div>
+  <aside id="infoPanel" class="info-panel hidden" aria-live="polite" aria-labelledby="infoPanelKicker">
+    <header class="info-panel-header">
+      <div class="info-panel-heading">
+        <h2 id="infoPanelKicker" class="info-panel-tab">
+          <span class="info-panel-tab-bar" aria-hidden="true"></span>
+          解説
+        </h2>
       </div>
-      <div class="info-gallery-controls">
-        <button type="button" id="infoGalleryPrev" class="info-gallery-nav hidden" aria-label="前の写真">‹</button>
-        <span id="infoGalleryCounter" class="info-gallery-counter hidden"></span>
-        <button type="button" id="infoGalleryNext" class="info-gallery-nav hidden" aria-label="次の写真">›</button>
-      </div>
+    </header>
+
+    <div class="info-panel-body">
+      <section class="info-panel-visual" aria-label="スポット画像">
+        <div id="infoGallery" class="info-gallery hidden">
+          <div id="infoGalleryStage" class="info-gallery-stage">
+            <button
+              type="button"
+              id="infoImageButton"
+              class="info-image-frame"
+              aria-label="写真を全画面表示"
+            >
+              <img id="infoImage" alt="" class="info-image" />
+            </button>
+            <model-viewer
+              id="infoModelViewer"
+              class="info-model-viewer hidden"
+              camera-controls
+              auto-rotate
+              auto-rotate-delay="0"
+              rotation-per-second="55deg"
+              touch-action="none"
+              interaction-prompt="none"
+              shadow-intensity="1"
+              exposure="1"
+              alt=""
+            ></model-viewer>
+            <div id="infoPhotoMetaOverlay" class="photo-meta-overlay hidden" hidden>
+              <h3 class="photo-meta-overlay-title"></h3>
+              <p class="photo-meta-overlay-date"></p>
+              <p class="photo-meta-overlay-description"></p>
+            </div>
+            <div class="info-gallery-toolbar">
+              <button
+                type="button"
+                id="infoPhotoMetaToggle"
+                class="info-photo-tool-btn hidden"
+                aria-label="画像の情報を表示します"
+                title="画像の情報を表示します"
+                aria-expanded="false"
+                aria-controls="infoPhotoMetaOverlay"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+                  <path fill="currentColor" d="M11 10h2v7h-2zm0-4h2v2h-2z" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                id="infoPhotoListToggle"
+                class="info-photo-tool-btn hidden"
+                aria-label="画像の一覧を表示します"
+                title="画像の一覧を表示します"
+                aria-expanded="false"
+                aria-controls="photoThumbLightbox"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="info-gallery-controls">
+            <button type="button" id="infoGalleryPrev" class="info-gallery-nav hidden" aria-label="前へ">‹</button>
+            <span id="infoGalleryCounter" class="info-gallery-counter hidden"></span>
+            <button type="button" id="infoGalleryNext" class="info-gallery-nav hidden" aria-label="次へ">›</button>
+          </div>
+        </div>
+        <div id="infoVisualEmpty" class="info-visual-empty">写真なし</div>
+        <div class="info-visual-footer">
+          <div class="info-visual-name-row">
+            <h1 id="infoTitle"></h1>
+            <div id="infoVisualCategories" class="info-category-badges"></div>
+          </div>
+          <p id="infoYears" class="info-years"></p>
+        </div>
+      </section>
+
+      <section class="info-panel-details" aria-label="スポット情報">
+        <dl class="info-facts">
+          <div class="info-fact" data-fact="name">
+            <dt>名前</dt>
+            <dd id="infoFactName"></dd>
+          </div>
+          <div class="info-fact" data-fact="category">
+            <dt>カテゴリ</dt>
+            <dd id="infoFactCategory" class="info-category-badges"></dd>
+          </div>
+          <div class="info-fact" data-fact="role">
+            <dt>役割</dt>
+            <dd id="infoFactRole"></dd>
+          </div>
+          <div class="info-fact" data-fact="years">
+            <dt>年代</dt>
+            <dd id="infoFactYears"></dd>
+          </div>
+          <div class="info-fact info-fact--block" data-fact="description">
+            <dt>説明</dt>
+            <dd id="infoDescription"></dd>
+          </div>
+          <div class="info-fact info-fact--block" data-fact="note">
+            <dt>注記</dt>
+            <dd id="infoNote" class="info-note"></dd>
+          </div>
+          <div class="info-fact info-fact--block" data-fact="sources">
+            <dt>参考</dt>
+            <dd>
+              <ul id="infoSources"></ul>
+            </dd>
+          </div>
+        </dl>
+      </section>
     </div>
-    <p id="infoDescription"></p>
-    <p id="infoNote" class="info-note"></p>
-    <ul id="infoSources"></ul>
+
+    <footer class="info-panel-footer">
+      <button type="button" id="infoFooterClose" class="info-footer-action">とじる</button>
+    </footer>
   </aside>
 
   <div id="photoThumbLightbox" class="photo-thumb-lightbox hidden" role="dialog" aria-modal="true" aria-labelledby="photoThumbTitle" hidden>
@@ -169,7 +345,10 @@
       </div>
     </dl>
     <button type="button" id="devCopyAngle" class="dev-panel-copy">
-      シート用にコピー
+      シート用にコピー（選択スポット基準）
+    </button>
+    <button type="button" id="devCopyInitialAngle" class="dev-panel-copy dev-panel-copy-secondary">
+      初期視点用にコピー（カメラ絶対姿勢）
     </button>
     <button type="button" id="devPreviewAngle" class="dev-panel-copy dev-panel-copy-secondary">
       往復チェック（今の位置で寄り直し）
