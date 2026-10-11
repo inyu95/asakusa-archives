@@ -10,6 +10,199 @@
       "scale": 0.86,
       "model": "models/Ryouunkaku.glb",
       "visibility": "both"
+
+    },
+    {
+      "id": "crowd-01",
+      "lat": 35.71103043,
+      "lon": 139.79636837,
+      "height": 3.93356347,
+      "heading": 0,
+      "scale": 1,
+      "model": "models/people-business-crowd.glb",
+      "visibility": "both",
+      "people": [
+        {
+          "model": "models/person-business-m01.glb",
+          "lat": 35.71103043,
+          "lon": 139.79636837,
+          "height": 3.93356347,
+          "heading": 98.49,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m01.glb",
+          "lat": 35.71100143,
+          "lon": 139.79636839,
+          "height": 3.93356347,
+          "heading": 332.11,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m02.glb",
+          "lat": 35.71104085,
+          "lon": 139.79635574,
+          "height": 3.87772322,
+          "heading": 299.57,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m02.glb",
+          "lat": 35.71105809,
+          "lon": 139.79635731,
+          "height": 3.93356347,
+          "heading": 96.51,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m03.glb",
+          "lat": 35.71105492,
+          "lon": 139.79634567,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m03.glb",
+          "lat": 35.71099763,
+          "lon": 139.7963457,
+          "height": 3.93356347,
+          "heading": 194.06,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m01.glb",
+          "lat": 35.71103042,
+          "lon": 139.79633418,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m01.glb",
+          "lat": 35.71104521,
+          "lon": 139.79630807,
+          "height": 3.93356347,
+          "heading": 139.21,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m02.glb",
+          "lat": 35.7110465,
+          "lon": 139.79633018,
+          "height": 3.93356347,
+          "heading": 186.61,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-m02.glb",
+          "lat": 35.71105532,
+          "lon": 139.79632311,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w01.glb",
+          "lat": 35.7110336,
+          "lon": 139.7963483,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w01.glb",
+          "lat": 35.71098941,
+          "lon": 139.79633414,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w02.glb",
+          "lat": 35.71103041,
+          "lon": 139.79630577,
+          "height": 3.93356347,
+          "heading": 299.73,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w02.glb",
+          "lat": 35.71101689,
+          "lon": 139.79631543,
+          "height": 3.93356347,
+          "heading": 120.93,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w03.glb",
+          "lat": 35.71105793,
+          "lon": 139.79628996,
+          "height": 3.93356347,
+          "heading": 121.43,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w03.glb",
+          "lat": 35.71099897,
+          "lon": 139.79629724,
+          "height": 3.93356347,
+          "heading": 62.96,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w01.glb",
+          "lat": 35.71104163,
+          "lon": 139.79628915,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w01.glb",
+          "lat": 35.71101688,
+          "lon": 139.79627892,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w02.glb",
+          "lat": 35.7110304,
+          "lon": 139.79626786,
+          "height": 3.93356347,
+          "heading": 62.17,
+          "scale": 1
+
+        },
+        {
+          "model": "models/person-business-w02.glb",
+          "lat": 35.7109937,
+          "lon": 139.79626788,
+          "height": 3.93356347,
+          "heading": 0,
+          "scale": 1
+
+        }
+      ]
     }
   ]
 }

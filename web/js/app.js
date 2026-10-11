@@ -108,6 +108,15 @@ const OVERVIEW_VIEW = {
   holdMs: 650,
 };
 
+/**
+ * 手動ズームの下限／上限（楕円体高のおおよその目安 m）。
+ * 下限は人物のアイレベルまで寄れるよう小さくする。
+ * ※ Cesium では enableCollisionDetection=false の間は min/max とも無効のため、
+ *   その間は clampCameraAltitude で上限を手動適用する。
+ */
+const MIN_ZOOM_DISTANCE = 2;
+const MAX_ZOOM_DISTANCE = 3500;
+
 /** 冒頭寄りで雷門が欠けないよう、一時的に細かくする SSE */
 const INTRO_BUILDING_SSE = 4;
 
@@ -552,6 +561,10 @@ const lightboxPhotoMetaOverlay = document.getElementById("lightboxPhotoMetaOverl
 /** @type {Map<string, object>} */
 const spotById = new Map();
 
+/** Entity.model ではなく primitives で保持（Cesium 1.118 で Entity 経由の GLB が読まれないため） */
+/** @type {Map<string, Cesium.Model>} */
+const spotModels = new Map();
+
 /** @type {Cesium.Viewer | null} */
 let mapViewer = null;
 
@@ -699,6 +712,69 @@ function flyToHeadingPitchRange(
   });
 }
 
+/**
+ * 門前・人物付近では地形／建物衝突を切る（押し上げられてアイレベルに寄れないのを防ぐ）。
+ * Cesium では enableCollisionDetection=false だと
+ * maximumZoomDistance / minimumZoomDistance も無効になるため、
+ * その間は clampCameraAltitude で引き上限を守る。
+ * @param {Cesium.Viewer} viewer
+ * @param {boolean} enabled
+ */
+function setCameraCollisionDetection(viewer, enabled) {
+  viewer.scene.screenSpaceCameraController.enableCollisionDetection = enabled;
+}
+
+/**
+ * 衝突OFF時に Cesium の min/max ズームが効かないので、楕円体高で引きすぎ・地面潜りを止める。
+ * @param {Cesium.Viewer} viewer
+ */
+function clampCameraAltitude(viewer) {
+  if (viewer.scene.screenSpaceCameraController.enableCollisionDetection) {
+    return;
+  }
+  const carto = viewer.camera.positionCartographic;
+  let height = carto.height;
+  let changed = false;
+
+  if (height > MAX_ZOOM_DISTANCE) {
+    height = MAX_ZOOM_DISTANCE;
+    changed = true;
+  }
+
+  // 地形タイルが載っていれば、アイレベル付近（地形+MIN）より下へ潜らない
+  const terrainHeight = viewer.scene.globe.getHeight(carto);
+  if (Number.isFinite(terrainHeight)) {
+    const floor = terrainHeight + MIN_ZOOM_DISTANCE;
+    if (height < floor) {
+      height = floor;
+      changed = true;
+    }
+  }
+
+  if (!changed) return;
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromRadians(
+      carto.longitude,
+      carto.latitude,
+      height
+    ),
+    orientation: {
+      heading: viewer.camera.heading,
+      pitch: viewer.camera.pitch,
+      roll: viewer.camera.roll,
+    },
+  });
+}
+
+/**
+ * @param {Cesium.Viewer} viewer
+ */
+function setupZoomDistanceClamp(viewer) {
+  viewer.scene.preUpdate.addEventListener(() => {
+    clampCameraAltitude(viewer);
+  });
+}
+
 function applyInitialView(viewer) {
   // 絶対姿勢を雷門注視＋方位固定のパスに合わせて調整（引き開始と一致させカクつき防止）
   const hpr = getIntroHprFromAbsolutePose(INITIAL_VIEW);
@@ -770,11 +846,15 @@ function applyIntroGateView(viewer, hpr, options = {}) {
  */
 async function playIntroPullback(viewer) {
   viewer.scene.requestRenderMode = false;
+  // 寄り中だけ衝突OFF（ズーム上限も同時に無効化される点に注意）
+  setCameraCollisionDetection(viewer, false);
 
   const startHpr = getIntroHprFromAbsolutePose(INITIAL_VIEW);
   const endHpr = getIntroHprFromAbsolutePose(OVERVIEW_VIEW);
   if (!startHpr || !endHpr) {
     applyInitialView(viewer);
+    // 門前アイレベル寄りのため衝突はOFFのまま（引き上限は clampCameraAltitude）
+    setCameraCollisionDetection(viewer, false);
     return false;
   }
 
@@ -846,6 +926,9 @@ async function playIntroPullback(viewer) {
   } finally {
     viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
     viewer.scene.globe.depthTestAgainstTerrain = true;
+    // 衝突ONだと門前・人物で押し上げられアイレベルに寄れないためOFFのまま。
+    // 引き上限は setupZoomDistanceClamp → clampCameraAltitude で維持する。
+    setCameraCollisionDetection(viewer, false);
     viewer.scene.requestRender();
   }
 }
@@ -1790,6 +1873,7 @@ const PLACEMENT_KEYS = [
   "model",
   "markerHeight",
   "visibility",
+  "people",
 ];
 
 function pickPlacement(meta) {
@@ -1937,55 +2021,139 @@ async function loadSpots() {
  * @param {Cesium.Viewer} viewer
  * @param {object} spot
  */
-async function addSpotModel(viewer, spot) {
-  const modelLon = spot.modelLon ?? spot.lon;
-  const modelLat = spot.modelLat ?? spot.lat;
-  let height = spot.height ?? 0;
-  // 地形がある場合は楕円体高をサンプリングして接地（固定値のずれを防ぐ）
+async function sampleTerrainHeight(viewer, lon, lat, fallbackHeight = 0) {
   try {
-    const carto = Cesium.Cartographic.fromDegrees(modelLon, modelLat);
-    const sampled = await Cesium.sampleTerrainMostDetailed(
-      viewer.terrainProvider,
-      [carto]
-    );
-    if (Number.isFinite(sampled[0]?.height)) {
-      height = sampled[0].height + (spot.heightOffset ?? 0);
-    }
+    const carto = Cesium.Cartographic.fromDegrees(lon, lat);
+    const sampled = await Promise.race([
+      Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, [carto]),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("terrain sample timeout")), 8000)
+      ),
+    ]);
+    if (Number.isFinite(sampled[0]?.height)) return sampled[0].height;
   } catch (err) {
-    console.warn(`地形サンプリング失敗 (${spot.id})、spots.json の height を使用`, err);
+    console.warn("地形サンプリング失敗、fallback を使用", err);
+  }
+  return fallbackHeight;
+}
+
+/**
+ * 人物パックなど people[] 付きは、各人を個別 GLB として各 lat/lon に置く。
+ * （まとめて 1 つの crowd GLB だと Unity 上の配置が失われる）
+ */
+async function addSpotModel(viewer, spot) {
+  if (spotModels.has(spot.id)) {
+    console.warn(`[model] id 重複のためスキップ: ${spot.id}`);
+    return null;
   }
 
-  const heading = Cesium.Math.toRadians(spot.heading ?? 0);
-  const pitch = Cesium.Math.toRadians(spot.pitch ?? 0);
-  const roll = Cesium.Math.toRadians(spot.roll ?? 0);
+  const people = Array.isArray(spot.people) ? spot.people.filter((p) => p?.model) : [];
+  if (people.length > 0) {
+    console.info(`[model] 読込開始: ${spot.id} → 人物 ${people.length} 体`);
+    /** @type {import("cesium").Model[]} */
+    const models = [];
+    for (let i = 0; i < people.length; i++) {
+      const person = people[i];
+      try {
+        const model = await loadGltfModel(viewer, {
+          id: `${spot.id}__${i}`,
+          model: person.model,
+          lon: person.lon ?? spot.lon,
+          lat: person.lat ?? spot.lat,
+          height: person.height ?? spot.height ?? 0,
+          heightOffset: person.heightOffset ?? spot.heightOffset ?? 0,
+          heading: person.heading ?? spot.heading ?? 0,
+          pitch: person.pitch ?? 0,
+          roll: person.roll ?? 0,
+          scale: person.scale ?? spot.scale ?? 1,
+        });
+        if (model) models.push(model);
+      } catch (err) {
+        console.warn(`[model] 人物読込失敗: ${spot.id}[${i}]`, err);
+      }
+    }
+    if (models.length === 0) return null;
+    spotModels.set(spot.id, models);
+    spotById.set(spot.id, spot);
+    console.info(`[model] 読込完了: ${spot.id}（${models.length} 体）`);
+    return models[0];
+  }
+
+  if (!spot.model) return null;
+  const model = await loadGltfModel(viewer, {
+    id: spot.id,
+    model: spot.model,
+    lon: spot.modelLon ?? spot.lon,
+    lat: spot.modelLat ?? spot.lat,
+    height: spot.height ?? 0,
+    heightOffset: spot.heightOffset ?? 0,
+    heading: spot.heading ?? 0,
+    pitch: spot.pitch ?? 0,
+    roll: spot.roll ?? 0,
+    scale: spot.scale ?? 1,
+  });
+  if (!model) return null;
+  spotModels.set(spot.id, model);
+  spotById.set(spot.id, spot);
+  return model;
+}
+
+/**
+ * @param {Cesium.Viewer} viewer
+ * @param {{
+ *   id: string,
+ *   model: string,
+ *   lon: number,
+ *   lat: number,
+ *   height?: number,
+ *   heightOffset?: number,
+ *   heading?: number,
+ *   pitch?: number,
+ *   roll?: number,
+ *   scale?: number,
+ * }} opts
+ */
+async function loadGltfModel(viewer, opts) {
+  const modelLon = opts.lon;
+  const modelLat = opts.lat;
+  const baseHeight = opts.height ?? 0;
+  const ground = await sampleTerrainHeight(
+    viewer,
+    modelLon,
+    modelLat,
+    baseHeight
+  );
+  const height = ground + (opts.heightOffset ?? 0);
+
+  const heading = Cesium.Math.toRadians(opts.heading ?? 0);
+  const pitch = Cesium.Math.toRadians(opts.pitch ?? 0);
+  const roll = Cesium.Math.toRadians(opts.roll ?? 0);
   const position = Cesium.Cartesian3.fromDegrees(modelLon, modelLat, height);
-  const orientation = Cesium.Transforms.headingPitchRollQuaternion(
+  const hpr = new Cesium.HeadingPitchRoll(heading, pitch, roll);
+  const modelMatrix = Cesium.Transforms.headingPitchRollToFixedFrame(
     position,
-    new Cesium.HeadingPitchRoll(heading, pitch, roll)
+    hpr
   );
 
-  const entity = viewer.entities.add({
-    id: spot.id,
-    name: spot.name,
-    position,
-    orientation,
-    show: introMarkersRevealed,
-    model: {
-      uri: spot.model,
-      scale: spot.scale ?? 1,
-      // 遠距離で無理に大きく描かない（ピクセル拡大は負荷が増える）
-      minimumPixelSize: 0,
-      maximumScale: 20000,
-      heightReference: Cesium.HeightReference.NONE,
-      // シーン光＋既定 IBL に任せる（強い補正は白飛び／黒潰れの原因）
-      imageBasedLightingFactor: new Cesium.Cartesian2(1.0, 1.0),
-      // 約 2.5 km 以遠は描画スキップ
-      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2500),
-    },
+  console.info(`[model] 読込: ${opts.id} → ${opts.model}`, {
+    lat: modelLat,
+    lon: modelLon,
+    height,
   });
 
-  spotById.set(spot.id, spot);
-  return entity;
+  const model = await Cesium.Model.fromGltfAsync({
+    id: opts.id,
+    url: opts.model,
+    modelMatrix,
+    scale: opts.scale ?? 1,
+    minimumPixelSize: 0,
+    maximumScale: 20000,
+    distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2500),
+  });
+  model.show = true;
+  viewer.scene.primitives.add(model);
+  console.info(`[model] 完了: ${opts.id}`);
+  return model;
 }
 
 /** カンマ／全角カンマ区切りのカテゴリ一覧 */
@@ -2024,8 +2192,15 @@ function pinMatchesQuery(spot, query) {
   return fields.some((field) => String(field || "").toLowerCase().includes(q));
 }
 
+/** シート行なしのモデル配置（人物など）。ピンやカテゴリ絞り込みの対象外。 */
+function isModelOnlySpot(spot) {
+  return Boolean(spot?.model) && !String(spot?.name || "").trim();
+}
+
 function pinMatchesCategoryFilter(spot) {
   if (selectedCategories.size === 0) return true;
+  // 人物などカテゴリなしのモデルは絞り込みでも消さない
+  if (isModelOnlySpot(spot)) return true;
   return parseCategoryList(spot.category).some((category) =>
     selectedCategories.has(category)
   );
@@ -2042,8 +2217,12 @@ function setSpotEntitiesVisible(spotId, visible) {
   if (!mapViewer) return;
   const marker = mapViewer.entities.getById(`${spotId}-marker`);
   if (marker) marker.show = visible;
-  const model = mapViewer.entities.getById(spotId);
-  if (model) model.show = visible;
+  const entry = spotModels.get(spotId);
+  if (!entry) return;
+  const models = Array.isArray(entry) ? entry : [entry];
+  for (const model of models) {
+    if (model) model.show = visible;
+  }
 }
 
 function updateSearchCount(filteredCount) {
@@ -2059,7 +2238,9 @@ function applyFilters() {
   const visibleIds = new Set(filtered.map((spot) => spot.id));
 
   for (const spot of allSpots) {
-    const show = introMarkersRevealed && visibleIds.has(spot.id);
+    const show =
+      isModelOnlySpot(spot) ||
+      (introMarkersRevealed && visibleIds.has(spot.id));
     setSpotEntitiesVisible(spot.id, show);
   }
 
@@ -2086,12 +2267,17 @@ function revealIntroMarkers() {
   const fadingMarkers = [];
 
   for (const spot of allSpots) {
-    const show = visibleIds.has(spot.id);
+    const show = isModelOnlySpot(spot) || visibleIds.has(spot.id);
     const marker = mapViewer.entities.getById(`${spot.id}-marker`);
-    const model = mapViewer.entities.getById(spot.id);
-    if (model) model.show = show;
+    const entry = spotModels.get(spot.id);
+    if (entry) {
+      const models = Array.isArray(entry) ? entry : [entry];
+      for (const model of models) {
+        if (model) model.show = show;
+      }
+    }
     if (!marker) continue;
-    if (!show) {
+    if (!show || isModelOnlySpot(spot)) {
       marker.show = false;
       continue;
     }
@@ -2502,11 +2688,13 @@ async function main() {
   // 寄り冒頭は地形深度テストを切る（一瞬門が地面に埋まったように見えるのを防ぐ）
   viewer.scene.globe.depthTestAgainstTerrain = false;
   applyPlateauViewSceneLighting(viewer);
-  viewer.scene.screenSpaceCameraController.minimumZoomDistance = 20;
-  // 表示円（半径1km）が画面に収まる程度で引き込みを止める
-  viewer.scene.screenSpaceCameraController.maximumZoomDistance = 3500;
-  // 近接初期視点が地形衝突で押し上げられないようにする
-  viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
+  viewer.scene.screenSpaceCameraController.minimumZoomDistance = MIN_ZOOM_DISTANCE;
+  // 俯瞰付近で引きをロック（それ以上ズームアウトできない）
+  // ※ enableCollisionDetection=false 中は効かない → setupZoomDistanceClamp で補う
+  viewer.scene.screenSpaceCameraController.maximumZoomDistance = MAX_ZOOM_DISTANCE;
+  // 門前アイレベル寄りのため衝突OFF（ONだと押し上げられる）
+  setCameraCollisionDetection(viewer, false);
+  setupZoomDistanceClamp(viewer);
 
   applyInitialView(viewer);
 
@@ -2568,7 +2756,13 @@ async function main() {
     setIntroSplashProgress(52);
     for (const spot of allSpots) {
       spotById.set(spot.id, spot);
-      await addSpotMarker(viewer, spot);
+      // 人物などシートなしモデルはピン不要（失敗で全体が止まらないようにする）
+      if (isModelOnlySpot(spot)) continue;
+      try {
+        await addSpotMarker(viewer, spot);
+      } catch (markerErr) {
+        console.warn(`ピン配置失敗: ${spot.id}`, markerErr);
+      }
     }
     applyFilters();
     setIntroSplashProgress(56);
@@ -2620,16 +2814,21 @@ async function main() {
 
     // 3D モデルはピン表示後に遅延読込
     void (async () => {
-      for (const spot of allSpots) {
-        if (!spot.model) continue;
+      const modelSpots = allSpots.filter((spot) => spot.model);
+      console.info(
+        `[model] 対象 ${modelSpots.length} 件:`,
+        modelSpots.map((s) => s.id)
+      );
+      for (const spot of modelSpots) {
         try {
           await addSpotModel(viewer, spot);
           const filtered = getFilteredSpots();
           const visibleIds = new Set(filtered.map((s) => s.id));
-          setSpotEntitiesVisible(
-            spot.id,
-            introMarkersRevealed && visibleIds.has(spot.id)
-          );
+          // モデル専用は常に表示。ピン付きスポットだけフィルタ適用
+          const visible =
+            isModelOnlySpot(spot) ||
+            (introMarkersRevealed && visibleIds.has(spot.id));
+          setSpotEntitiesVisible(spot.id, visible);
         } catch (modelErr) {
           console.warn(`モデル読込失敗: ${spot.id}`, modelErr);
         }

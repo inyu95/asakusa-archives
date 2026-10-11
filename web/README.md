@@ -100,10 +100,22 @@ dotnet run -c Release --project tools/ObjToGlb/ObjToGlb.csproj -- web/models/Ryo
 変換時に頂点クラスタリング（既定セルサイズ 0.18 m）でメッシュを軽量化します。
 第3引数でセルサイズを変えられます（大きいほど軽く、ディテールは落ちます）。
 
+## Unity からの配置書き出し
+
+Unity（`AsakusaTimeTravel_6000.3`）でモデルを置いたあと、メニューから `spots.json` に書き出せます。
+
+1. Hierarchy で **GLB インスタンス**（モデルのルート）を選択 → **Asakusa Time Travel → Add WebSpotPlacement to Selection**
+2. `model` はその GLB に対応する Web パス（人物パックは `models/people-business-crowd.glb`・低ポリ10体・約35MB）
+3. 同じ GLB を複数置きたいときはインスタンスを複製し、それぞれに Placement を付ける（例: `people-business-crowd-01` / `-02`）
+4. **Asakusa Time Travel → Export Spots JSON** → **GLB 1 つ = spots.json 1 エントリ**
+5. Web を **Ctrl+Shift+R** で確認
+
+`WebSpotPlacement` は **GLB インスタンス単位**（シーンルートには上げない）です。人物パックは `model` に `people-business-crowd.glb` を書きつつ、子の各人（H50k / L10k 両方）の lat/lon を `people[]` に書き出します。Web はいずれも軽量 1 体 GLB として各地点に置きます。
+
 ## スポットの追加
 
 1. スプレッドシート「マッピング」に行を追加（`name` / `lat,lon` / `text` / `image` / URL・年代など）— ピンはこの座標
-2. 3D モデルがある場合は `spots.json` に Unity 配置を追加し、`id` または `sheetName` でシート行と対応させる
+2. 3D モデルがある場合は `spots.json` に Unity 配置を追加し、`id` または `sheetName` でシート行と対応させる（Unity メニューから書き出してもよい）
 
 `spots.json` のフィールド（コンテンツやピン座標は入れない。Unity モデル配置のみ）:
 
