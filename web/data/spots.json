@@ -19,7 +19,7 @@
       "height": 3.82243967,
       "heading": 288.1,
       "scale": 1,
-      "model": "models/JPGV01_M02_L10k.glb",
+      "model": "models/person-business-m02.glb",
       "visibility": "both"
 
     },
@@ -30,7 +30,7 @@
       "height": 3.86131763,
       "heading": 0,
       "scale": 1,
-      "model": "models/JPGV01_M03_L10k.glb",
+      "model": "models/person-business-m03.glb",
       "visibility": "both"
 
     },
@@ -41,7 +41,7 @@
       "height": 3.8037858,
       "heading": 82.45,
       "scale": 0.99999994,
-      "model": "models/JPGV01_M05_L10k.glb",
+      "model": "models/person-business-m02.glb",
       "visibility": "both"
 
     },
@@ -52,7 +52,7 @@
       "height": 3.93707633,
       "heading": 139.33,
       "scale": 1,
-      "model": "models/JPGV01_W02_L10k.glb",
+      "model": "models/person-business-w02.glb",
       "visibility": "both"
 
     },
@@ -63,7 +63,7 @@
       "height": 3.93756604,
       "heading": 118.81,
       "scale": 1.00000024,
-      "model": "models/JPGV01_W03_L10k.glb",
+      "model": "models/person-business-w03.glb",
       "visibility": "both"
 
     },
@@ -74,7 +74,7 @@
       "height": 3.90225935,
       "heading": 0,
       "scale": 1,
-      "model": "models/JPGV01_W04_L10k.glb",
+      "model": "models/person-business-w01.glb",
       "visibility": "both"
 
     },
@@ -85,7 +85,7 @@
       "height": 3.87272215,
       "heading": 0,
       "scale": 1,
-      "model": "models/JPGV01_W05_L10k.glb",
+      "model": "models/person-business-w02.glb",
       "visibility": "both"
 
     }

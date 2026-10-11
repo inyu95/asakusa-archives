@@ -431,6 +431,8 @@ public static class ExportWebSpotsMenu
             return true;
         if (id.StartsWith("people-business-crowd", StringComparison.OrdinalIgnoreCase))
             return true;
+        if (id.StartsWith("jpgv01_", StringComparison.OrdinalIgnoreCase))
+            return true;
         if (id.IndexOf("japanese_3d_people", StringComparison.OrdinalIgnoreCase) >= 0)
             return true;
         return false;
@@ -487,19 +489,32 @@ public static class ExportWebSpotsMenu
     }
 
     /// <summary>
-    /// Unity の人物パック名は Web 用の軽量まとめ GLB に差し替える。
+    /// Unity の人物アセット名を Web に実在する GLB パスへ差し替える。
+    /// JPGV01_* → person-business-*.glb / パック全体 → people-business-crowd.glb
     /// </summary>
     static string ResolveWebModelPath(GameObject go, string currentModel)
     {
+        // オブジェクト名から先に解決（個別に切り出した JPGV01_* 用）
+        var fromName = ModelPathFromPersonName(go != null ? go.name : null);
+        if (fromName != null)
+            return fromName;
+
         var guessed = GuessModelPath(go);
         var raw = string.IsNullOrWhiteSpace(currentModel) ? guessed : currentModel;
         if (string.IsNullOrWhiteSpace(raw))
             return DefaultCrowdModel;
         raw = raw.Trim().Replace('\\', '/');
+
+        var fromRaw = ModelPathFromPersonName(Path.GetFileNameWithoutExtension(raw));
+        if (fromRaw != null)
+            return fromRaw;
+
         if (raw.IndexOf("Japanese_3D_People", StringComparison.OrdinalIgnoreCase) >= 0)
             return DefaultCrowdModel;
         if (raw.IndexOf("people-business-crowd", StringComparison.OrdinalIgnoreCase) >= 0)
             return DefaultCrowdModel;
+        if (raw.StartsWith("models/person-business-", StringComparison.OrdinalIgnoreCase))
+            return raw;
         return raw;
     }
 
@@ -582,6 +597,13 @@ public static class ExportWebSpotsMenu
 
     static string GuessModelPath(GameObject go)
     {
+        if (go != null)
+        {
+            var fromName = ModelPathFromPersonName(go.name);
+            if (fromName != null)
+                return fromName;
+        }
+
         var prefab = PrefabUtility.GetCorrespondingObjectFromSource(go);
         if (prefab == null)
             return DefaultCrowdModel;
@@ -590,6 +612,11 @@ public static class ExportWebSpotsMenu
             return DefaultCrowdModel;
         if (path.IndexOf("Japanese_3D_People", StringComparison.OrdinalIgnoreCase) >= 0)
             return DefaultCrowdModel;
+
+        var fromFile = ModelPathFromPersonName(Path.GetFileNameWithoutExtension(path));
+        if (fromFile != null)
+            return fromFile;
+
         if (!path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) &&
             !path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase))
             return DefaultCrowdModel;
